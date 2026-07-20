@@ -24,3 +24,5 @@ To clone the repository and begin working with the source code:
 
 ```bash
 git clone [https://github.com/BeardedTech0o/meshnatter.git](https://github.com/BeardedTech0o/meshnatter.git)
+
+[![Buy Me a Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=nullobj&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff)](https://www.buymeacoffee.com/nullobj)
