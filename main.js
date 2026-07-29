@@ -1,10 +1,122 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron');
-const path = require('path');
-const net  = require('net');
+const path  = require('path');
+const net   = require('net');
+const fs    = require('fs');
+const os    = require('os');
+const https = require('https');
+const { spawn } = require('child_process');
 
 let mainWindow = null;
 let tray = null;
 let appPort = 3000;
+
+// ── UPDATE CHECK ───────────────────────────────────────────────────
+// Plain GitHub Releases check — no extra runtime dependency, no extra
+// release artifacts (electron-updater would need latest.yml published
+// alongside the installer and would add weight to the packaged app).
+const UPDATE_REPO = 'BeardedTech0o/meshnatter';
+const UPDATE_ASSET_RE = /^Meshnatter-Setup-.*\.exe$/i;   // matches build.nsis.artifactName
+
+function ghHeaders() {
+  const headers = {
+    'User-Agent': 'Meshnatter-Updater',
+    'Accept': 'application/vnd.github+json',
+  };
+  // Public repos need no token; support one anyway so a private repo just works later.
+  const token = process.env.MESHNATTER_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+function httpsGetJson(url, redirects = 3) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: ghHeaders(), timeout: 10000 }, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if (redirects <= 0) return reject(new Error('Too many redirects'));
+        return httpsGetJson(res.headers.location, redirects - 1).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', c => { body += c; if (body.length > 2e6) req.destroy(new Error('Response too large')); });
+      res.on('end', () => { try { resolve(JSON.parse(body)); } catch (e) { reject(e); } });
+    });
+    req.on('timeout', () => req.destroy(new Error('Timed out')));
+    req.on('error', reject);
+  });
+}
+
+function downloadTo(url, destPath, redirects = 5) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { ...ghHeaders(), Accept: 'application/octet-stream' }, timeout: 60000 }, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if (redirects <= 0) return reject(new Error('Too many redirects'));
+        return downloadTo(res.headers.location, destPath, redirects - 1).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+      const file = fs.createWriteStream(destPath);
+      res.pipe(file);
+      file.on('finish', () => file.close(() => resolve(destPath)));
+      file.on('error', err => { try { fs.unlinkSync(destPath); } catch {} reject(err); });
+    });
+    req.on('timeout', () => req.destroy(new Error('Download timed out')));
+    req.on('error', reject);
+  });
+}
+
+// Returns > 0 when `a` is newer than `b`. Tolerates a leading "v" and pre-release suffixes.
+function compareVersions(a, b) {
+  const parse = v => String(v || '').replace(/^v/i, '').split(/[.+-]/).slice(0, 3).map(n => parseInt(n, 10) || 0);
+  const pa = parse(a), pb = parse(b);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}
+
+async function checkForUpdates() {
+  // Never let the update check affect startup — log and give up on any problem.
+  try {
+    if (process.platform !== 'win32') return;
+    const current = app.getVersion();
+    const release = await httpsGetJson(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`);
+    const latest = release?.tag_name || release?.name;
+    if (!latest) { console.log('[update] No release found'); return; }
+    if (compareVersions(latest, current) <= 0) {
+      console.log(`[update] Up to date (running ${current}, latest ${latest})`);
+      return;
+    }
+    const asset = (release.assets || []).find(a => UPDATE_ASSET_RE.test(a.name || ''))
+               || (release.assets || []).find(a => /\.exe$/i.test(a.name || ''));
+    if (!asset) { console.log('[update] Release has no Windows installer asset'); return; }
+
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      buttons: ['Download & Install', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Meshnatter update available',
+      message: `Meshnatter ${String(latest).replace(/^v/i, '')} is available.`,
+      detail: `You are running ${current}. Download the installer (${Math.round((asset.size || 0) / 1048576)} MB) and run it now?\n\nMeshnatter will close so the installer can replace its files.`,
+      noLink: true,
+    });
+    if (response !== 0) { console.log('[update] User deferred update'); return; }
+
+    const dest = path.join(os.tmpdir(), asset.name.replace(/[^\w.\-]/g, '_'));
+    console.log('[update] Downloading', asset.browser_download_url, '->', dest);
+    await downloadTo(asset.url || asset.browser_download_url, dest);
+
+    console.log('[update] Launching installer');
+    const child = spawn(dest, [], { detached: true, stdio: 'ignore' });
+    child.unref();
+    app.isQuitting = true;
+    setTimeout(() => app.quit(), 800);
+  } catch (err) {
+    console.log('[update] Check skipped:', err?.message || err);
+  }
+}
 
 function findFreePort(start) {
   return new Promise(resolve => {
@@ -151,6 +263,9 @@ if (!app.requestSingleInstanceLock()) {
 
     createWindow(appPort);
     createTray();
+
+    // Ask GitHub whether a newer installer exists — non-blocking, best effort
+    setTimeout(() => { checkForUpdates(); }, 5000);
   });
 
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
