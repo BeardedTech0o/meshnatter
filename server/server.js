@@ -10,10 +10,18 @@ import { fromBinary, toBinary, create } from '@bufbuild/protobuf';
 import { Protobuf } from '@meshtastic/core';
 
 
-const { Mesh, Portnums, Telemetry, Channel: ChannelPb } = Protobuf;
+const { Mesh, Portnums, Telemetry, Channel: ChannelPb, Admin, Config: ConfigNs } = Protobuf;
 const { FromRadioSchema, ToRadioSchema, MeshPacketSchema, PositionSchema, UserSchema, RoutingSchema, Routing_Error } = Mesh;
 const { PortNum } = Portnums;
 const { TelemetrySchema } = Telemetry;
+const { AdminMessageSchema, AdminMessage_ConfigType } = Admin;
+const {
+  ConfigSchema,
+  Config_DeviceConfigSchema,
+  Config_DeviceConfig_Role,
+  Config_DeviceConfig_RebroadcastMode,
+  Config_DeviceConfig_BuzzerMode,
+} = ConfigNs;
 
 const SERVER_PORT = parseInt(process.env.MESHNATTER_PORT || '3000');
 const POLL_MS = 400;
@@ -31,6 +39,11 @@ const wss = new WebSocketServer({ server: httpServer });
 
 let nodeHost = null, nodePort = 80, pollTimer = null, heartbeatTimer = null;
 let active = false, polling = false, pollErrors = 0, reconnectTimer = null;
+// Admin / device-config state
+let myNodeNum = null;              // learned from the myInfo FromRadio frame
+let sessionPasskey = null;         // echoed back by the node on admin responses
+let lastDeviceConfig = null;       // last known DeviceConfig (needed for partial writes)
+let configRefreshTimer = null;
 
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
@@ -61,6 +74,108 @@ async function sendHeartbeat() {
   try { await httpPut(`${nodeBaseUrl()}/api/v1/toradio`, toBinary(ToRadioSchema, create(ToRadioSchema, { payloadVariant: { case: 'heartbeat', value: {} } })), 4000); } catch {}
 }
 
+// ── DEVICE CONFIG (AdminMessage over the same ToRadio HTTP endpoint) ──────
+// Enum name lists are derived from the protobuf descriptors so the UI never
+// drifts from the @meshtastic/core version we actually ship.
+function enumOptions(enumObj) {
+  return Object.entries(enumObj)
+    .filter(([k]) => /^\d+$/.test(k))
+    .map(([k, v]) => ({ value: Number(k), name: String(v) }))
+    .sort((a, b) => a.value - b.value);
+}
+const CONFIG_ENUMS = {
+  role: enumOptions(Config_DeviceConfig_Role),
+  rebroadcastMode: enumOptions(Config_DeviceConfig_RebroadcastMode),
+  buzzerMode: enumOptions(Config_DeviceConfig_BuzzerMode),
+};
+
+// Whitelist of writable DeviceConfig fields — anything else from the renderer
+// is ignored. Keeps the set_config payload well-formed.
+const DEVICE_FIELDS = {
+  role: 'int', rebroadcastMode: 'int', buzzerMode: 'int',
+  buttonGpio: 'int', buzzerGpio: 'int', nodeInfoBroadcastSecs: 'int',
+  serialEnabled: 'bool', doubleTapAsButtonPress: 'bool', isManaged: 'bool',
+  disableTripleClick: 'bool', ledHeartbeatDisabled: 'bool',
+  tzdef: 'string',
+};
+
+function deviceConfigToJson(dev) {
+  const out = {};
+  for (const key of Object.keys(DEVICE_FIELDS)) {
+    const v = dev?.[key];
+    if (DEVICE_FIELDS[key] === 'int') out[key] = Number(v ?? 0);
+    else if (DEVICE_FIELDS[key] === 'bool') out[key] = !!v;
+    else out[key] = String(v ?? '');
+  }
+  return out;
+}
+
+function publishDeviceConfig(dev, source) {
+  lastDeviceConfig = deviceConfigToJson(dev);
+  broadcast({ type: 'deviceConfig', source, config: lastDeviceConfig, enums: CONFIG_ENUMS });
+}
+
+async function sendAdmin(variantCase, variantValue, wantResponse = false) {
+  if (!active) throw new Error('Not connected to a node');
+  if (myNodeNum == null) throw new Error('Node identity not known yet — wait for the mesh to finish loading');
+  const admin = create(AdminMessageSchema, {
+    ...(sessionPasskey?.length ? { sessionPasskey } : {}),
+    payloadVariant: { case: variantCase, value: variantValue },
+  });
+  const packetId = Math.floor(Math.random() * 0x7ffffffe) + 1;
+  const mp = create(MeshPacketSchema, {
+    id: packetId,
+    to: myNodeNum,
+    channel: 0,
+    decoded: {
+      portnum: PortNum.ADMIN_APP,
+      payload: toBinary(AdminMessageSchema, admin),
+      wantResponse,
+    },
+    wantAck: false,
+    hopLimit: 0,
+  });
+  await httpPut(`${nodeBaseUrl()}/api/v1/toradio`,
+    toBinary(ToRadioSchema, create(ToRadioSchema, { payloadVariant: { case: 'packet', value: mp } })));
+  return packetId;
+}
+
+async function requestDeviceConfig() {
+  await sendAdmin('getConfigRequest', AdminMessage_ConfigType.DEVICE_CONFIG, true);
+  log('Device config requested');
+}
+
+async function setDeviceConfig(patch) {
+  if (!patch || typeof patch !== 'object') throw new Error('No config supplied');
+  // set_config replaces the whole DeviceConfig submessage, so merge onto what
+  // we last read from the node rather than sending a sparse message.
+  const merged = { ...(lastDeviceConfig || {}) };
+  for (const [key, kind] of Object.entries(DEVICE_FIELDS)) {
+    if (!(key in patch)) continue;
+    const raw = patch[key];
+    if (kind === 'int') {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0 || n > 0xffffffff) throw new Error(`Invalid value for ${key}`);
+      merged[key] = Math.floor(n);
+    } else if (kind === 'bool') {
+      merged[key] = !!raw;
+    } else {
+      if (typeof raw !== 'string' || raw.length > 64) throw new Error(`Invalid value for ${key}`);
+      merged[key] = raw;
+    }
+  }
+  const device = create(Config_DeviceConfigSchema, merged);
+  const config = create(ConfigSchema, { payloadVariant: { case: 'device', value: device } });
+  await sendAdmin('beginEditSettings', true);
+  await sendAdmin('setConfig', config);
+  await sendAdmin('commitEditSettings', true);
+  lastDeviceConfig = deviceConfigToJson(device);
+  log('Device config written');
+  // Read it back so the UI reflects what the node actually stored.
+  clearTimeout(configRefreshTimer);
+  configRefreshTimer = setTimeout(() => { requestDeviceConfig().catch(() => {}); }, 3000);
+}
+
 function handleFromRadio(bytes) {
   if (!bytes?.length) return;
   let pkt; try { pkt = fromBinary(FromRadioSchema, bytes); } catch { return; }
@@ -68,7 +183,8 @@ function handleFromRadio(bytes) {
   const { case: kind, value: val } = pkt.payloadVariant;
 
   if (kind === 'myInfo') {
-    broadcast({ type: 'myInfo', myNodeNum: Number(val.myNodeNum) });
+    myNodeNum = Number(val.myNodeNum);
+    broadcast({ type: 'myInfo', myNodeNum });
   } else if (kind === 'nodeInfo') {
     const n = val;
     broadcast({ type: 'node', node: {
@@ -86,6 +202,9 @@ function handleFromRadio(bytes) {
       snr: n.snr ?? null, hopsAway: n.hopsAway ?? null,
       lastHeard: n.lastHeard ? new Date(Number(n.lastHeard) * 1000).toISOString() : null,
     }});
+  } else if (kind === 'config') {
+    // The node streams its whole Config after wantConfig — pick up DeviceConfig
+    if (val?.payloadVariant?.case === 'device') publishDeviceConfig(val.payloadVariant.value, 'stream');
   } else if (kind === 'channel') {
     const ch = val;
     if (ch.role === 0) return;
@@ -119,6 +238,15 @@ function handleFromRadio(bytes) {
       try { const pos = fromBinary(PositionSchema, decoded.payload); broadcast({ type: 'position', fromNum: from, fromId: numToId(from), lat: pos.latitudeI ? pos.latitudeI / 1e7 : null, lon: pos.longitudeI ? pos.longitudeI / 1e7 : null, alt: pos.altitude ?? null }); } catch {}
     } else if (decoded.portnum === PortNum.TELEMETRY_APP) {
       try { const tel = fromBinary(TelemetrySchema, decoded.payload); const dm = tel.variant?.case === 'deviceMetrics' ? tel.variant.value : null; broadcast({ type: 'telemetry', fromNum: from, fromId: numToId(from), batteryLevel: dm?.batteryLevel ?? null, voltage: dm?.voltage ? (dm.voltage/1000).toFixed(2) : null, chUtil: dm?.channelUtilization ?? null, airUtil: dm?.airUtilTx ?? null, rxRssi, rxSnr }); } catch {}
+    } else if (decoded.portnum === PortNum.ADMIN_APP) {
+      try {
+        const am = fromBinary(AdminMessageSchema, decoded.payload);
+        if (am.sessionPasskey?.length) sessionPasskey = am.sessionPasskey;
+        if (am.payloadVariant?.case === 'getConfigResponse') {
+          const cfg = am.payloadVariant.value;
+          if (cfg?.payloadVariant?.case === 'device') publishDeviceConfig(cfg.payloadVariant.value, 'admin');
+        }
+      } catch {}
     } else if (decoded.portnum === PortNum.NODEINFO_APP) {
       try { const user = fromBinary(UserSchema, decoded.payload); broadcast({ type: 'nodeUser', fromNum: from, fromId: numToId(from), longName: user.longName, shortName: user.shortName }); } catch {}
     }
@@ -181,7 +309,13 @@ async function doConnect(ip, port) {
   startTimers();
 }
 
-function doDisconnect(silent=false) { active=false; pollErrors=0; nodeHost=null; stopTimers(); if(!silent) broadcast({ type: 'disconnected' }); }
+function doDisconnect(silent=false) {
+  active=false; pollErrors=0; nodeHost=null;
+  myNodeNum=null; sessionPasskey=null; lastDeviceConfig=null;
+  clearTimeout(configRefreshTimer); configRefreshTimer=null;
+  stopTimers();
+  if(!silent) broadcast({ type: 'disconnected' });
+}
 
 wss.on('connection', ws => {
   ws.send(JSON.stringify({ type: active ? 'connected' : 'disconnected', ip: nodeHost }));
@@ -189,6 +323,15 @@ wss.on('connection', ws => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (msg.type === 'connect') { doDisconnect(true); await doConnect(msg.ip, msg.port || 80); }
     else if (msg.type === 'disconnect') { doDisconnect(); }
+    else if (msg.type === 'getDeviceConfig') {
+      if (lastDeviceConfig) ws.send(JSON.stringify({ type: 'deviceConfig', source: 'cache', config: lastDeviceConfig, enums: CONFIG_ENUMS }));
+      try { await requestDeviceConfig(); }
+      catch (e) { ws.send(JSON.stringify({ type: 'configResult', ok: false, action: 'read', error: e.message })); }
+    }
+    else if (msg.type === 'setDeviceConfig') {
+      try { await setDeviceConfig(msg.config); broadcast({ type: 'configResult', ok: true, action: 'write' }); }
+      catch (e) { ws.send(JSON.stringify({ type: 'configResult', ok: false, action: 'write', error: e.message })); }
+    }
     else if (msg.type === 'sendMessage') {
       try { const id = await sendText(msg.text, msg.destinationNum??null, msg.channelIndex??0); broadcast({ type: 'messageSent', text: msg.text, destinationNum: msg.destinationNum, channelIndex: msg.channelIndex, packetId: id, ts: new Date().toISOString() }); }
       catch (e) { ws.send(JSON.stringify({ type: 'sendError', error: e.message })); }
