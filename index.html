@@ -16,150 +16,272 @@
 <body>
 <div class="shell">
 
-  <!-- ══ SIDEBAR ══ -->
-  <div class="sidebar" id="panelSidebar">
-    <div class="sb-header">
-      <div class="sb-title-row">
-        <div class="sb-app-icon"><span class="icon filled" style="color:#fff;font-size:18px">hub</span></div>
-        <div class="sb-title">Meshnatter</div>
-        <button class="icon-btn" onclick="window.open('https://meshsense.affirmatech.com/')" title="Global map"><span class="icon">public</span></button>
+  <!-- ══ PERSISTENT LEFT NAVIGATION ══ -->
+  <nav class="nav" id="navRail">
+
+    <!-- App / node identity -->
+    <div class="nav-identity">
+      <div class="nav-id-icon"><span class="icon filled" style="color:#fff;font-size:20px">cell_tower</span></div>
+      <div class="nav-id-text">
+        <div class="nav-id-name" id="navNodeName">Meshnatter</div>
+        <div class="nav-id-sub" id="navNodeSub">No node connected</div>
       </div>
-      <div class="sb-status-row">
-        <div class="status-dot" id="cDot"></div>
-        <span class="status-text" id="cText">Not connected</span>
-        <span class="uptime-text" id="uptimeText"></span>
-      </div>
+      <button class="icon-btn" id="navEditBtn" onclick="toggleConnPanel()" title="Connection settings">
+        <span class="icon sm">edit</span>
+      </button>
     </div>
 
-    <div class="conn-form">
-      <input class="conn-ip" id="nodeIp" placeholder="Node IP address" value="192.168.1.103">
-      <button class="btn-connect" id="connBtn" onclick="toggleConn()">Connect</button>
-    </div>
-    <div class="port-sel">
-      <span class="port-label">Port</span>
-      <label class="port-opt">
-        <input type="radio" name="meshPort" value="80" checked onchange="setPort(80)">
-        <span>80</span>
-      </label>
-      <label class="port-opt">
-        <input type="radio" name="meshPort" value="4403" onchange="setPort(4403)">
-        <span>4403</span>
-      </label>
-    </div>
+    <!-- Always-visible connection status -->
+    <button class="nav-status" onclick="toggleConnPanel()" title="Connection settings">
+      <div class="status-dot" id="cDot"></div>
+      <span class="status-text" id="cText">Not connected</span>
+      <span class="uptime-text" id="uptimeText"></span>
+      <span class="icon sm nav-status-chev" id="connChev">expand_more</span>
+    </button>
 
-    <div class="filter-seg">
-      <button class="fseg active" id="ftAll" onclick="setFilter('all')">All</button>
-      <button class="fseg" id="ftOnline" onclick="setFilter('online')">Online</button>
-    </div>
-
-    <div class="chat-list" id="chatList">
-      <div style="padding:24px 16px;text-align:center;color:var(--label-3);font-size:13px;line-height:1.6">
-        Connect to your your node<br>to see your mesh
+    <!-- Quick connect / reconnect -->
+    <div class="nav-conn" id="connPanel">
+      <div class="conn-form">
+        <input class="conn-ip" id="nodeIp" placeholder="Node IP address" value="192.168.1.103">
+        <button class="btn-connect" id="connBtn" onclick="toggleConn()">Connect</button>
       </div>
-    </div>
-
-    <div class="node-detail" id="nodeDetail">
-      <div class="nd-header">
-        <span class="nd-name" id="ndName"></span>
-        <button class="nd-close icon-btn" onclick="closeNodeDetail()"><span class="icon sm">close</span></button>
-      </div>
-      <div class="nd-grid" id="ndGrid"></div>
-      <div class="nd-pos" id="ndPos"></div>
-      <div class="nd-last" id="ndLast"></div>
-      <div class="nd-actions" id="ndActions"></div>
-    </div>
-  </div>
-
-  <!-- ══ MAP PANEL ══ -->
-  <div class="map-panel" id="panelMap">
-    <div class="map-header">
-      <span class="icon sm" style="color:var(--label-3)">map</span>
-      <span class="map-title">Mesh Map</span>
-      <div class="map-pills">
-        <div class="map-pill"><span class="icon sm" style="color:var(--label-3)">device_hub</span> <span class="v" id="mNodes">0</span></div>
-        <div class="map-pill"><span class="icon sm" style="color:var(--label-3)">location_on</span> <span class="v" id="mOnMap">0</span></div>
-      </div>
-    </div>
-    <div class="map-body">
-      <div id="map"></div>
-      <div class="map-legend">
-        <div class="ml-title">Signal</div>
-        <div class="ml-row"><div class="ml-dot" style="background:var(--sig-ex);box-shadow:0 0 5px var(--sig-ex)"></div>Excellent &ge;&minus;100 dBm</div>
-        <div class="ml-row"><div class="ml-dot" style="background:var(--sig-gd)"></div>Good &minus;110 to &minus;100</div>
-        <div class="ml-row"><div class="ml-dot" style="background:var(--sig-ok)"></div>Fair &minus;120 to &minus;110</div>
-        <div class="ml-row"><div class="ml-dot" style="background:var(--sig-bad)"></div>Poor &lt;&minus;120 dBm</div>
-        <div class="ml-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--separator)"><div class="ml-dot" style="background:var(--red);opacity:.4"></div>Offline node</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══ CHAT PANEL ══ -->
-  <div class="chat-panel" id="panelChat">
-    <!-- Shared header showing current conversation info -->
-    <div class="chat-header">
-      <div class="ch-avi" id="chAvi"><span class="icon" style="color:var(--label-3)">forum</span></div>
-      <div class="ch-info">
-        <div class="ch-name" id="chName">Select a channel</div>
-        <div class="ch-sub" id="chSub">
-          <div class="stat-bar" id="statBar">
-            <span class="stat-chip">Nodes <span class="v" id="scNodes">0</span></span>
-            <span class="stat-chip">Online <span class="v" id="scOnline">0</span></span>
-            <span class="stat-chip">SNR <span class="v" id="scSnr">--</span> dB</span>
-            <span class="stat-chip">RSSI <span class="v" id="scRssi">--</span> dBm</span>
-          </div>
-        </div>
+      <div class="port-sel">
+        <span class="port-label">Port</span>
+        <label class="port-opt">
+          <input type="radio" name="meshPort" value="80" checked onchange="setPort(80)">
+          <span>80</span>
+        </label>
+        <label class="port-opt">
+          <input type="radio" name="meshPort" value="4403" onchange="setPort(4403)">
+          <span>4403</span>
+        </label>
       </div>
     </div>
 
-    <!-- Tab switcher -->
-    <div class="right-tabs">
-      <button class="right-tab active" id="tabBtnMessages" onclick="switchRightTab('messages')">
-        <span class="icon">chat</span>
-        Messages
+    <!-- Navigation group -->
+    <div class="nav-group">
+      <div class="nav-group-title">Navigation</div>
+      <button class="nav-item active" id="tabBtnMessages" onclick="navigate('messages')">
+        <span class="icon">chat</span><span class="nav-item-label">Messages</span>
         <span class="tab-badge" id="tabBadgeMessages" style="display:none">0</span>
       </button>
-      <button class="right-tab" id="tabBtnChannels" onclick="switchRightTab('channels')">
-        <span class="icon">hub</span>
-        Channels
+      <button class="nav-item" id="navBtnMap" onclick="navigate('map')">
+        <span class="icon">map</span><span class="nav-item-label">Map</span>
+      </button>
+      <button class="nav-item" id="navBtnConfig" onclick="navigate('config')">
+        <span class="icon">settings</span><span class="nav-item-label">Config</span>
+      </button>
+      <button class="nav-item" id="tabBtnChannels" onclick="navigate('channels')">
+        <span class="icon">hub</span><span class="nav-item-label">Channels</span>
         <span class="tab-badge" id="tabBadgeChannels" style="display:none">0</span>
+      </button>
+      <button class="nav-item" id="navBtnPeers" onclick="navigate('peers')">
+        <span class="icon">group</span><span class="nav-item-label">Peers</span>
+        <span class="nav-item-count" id="navPeerCount">0</span>
       </button>
     </div>
 
-    <!-- MESSAGES TAB -->
-    <div class="tab-pane active" id="tabPaneMessages">
-      <div class="msg-feed" id="msgFeed">
-        <div class="msg-empty">
-          <span class="icon xl">hub</span>
-          <div class="msg-empty-title">Meshnatter</div>
-          <div class="msg-empty-sub">Connect to your node to get started</div>
+    <!-- Bottom rail -->
+    <div class="nav-rail">
+      <button class="rail-btn" id="railTheme" onclick="toggleTheme()" title="Toggle light / dark theme">
+        <span class="icon sm" id="railThemeIcon">light_mode</span>
+      </button>
+      <button class="rail-btn" onclick="toggleConsole()" title="Server console">
+        <span class="icon sm">terminal</span>
+      </button>
+      <button class="rail-btn" onclick="showLanguages()" title="Language">
+        <span class="icon sm">language</span>
+      </button>
+      <span class="rail-spacer"></span>
+      <button class="rail-btn" onclick="window.open('https://meshtastic.org/docs/')" title="Meshtastic docs">
+        <span class="icon sm">help</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ══ MAIN AREA ══ -->
+  <main class="main" id="mainArea">
+
+    <!-- ── MESSAGES ── -->
+    <section class="page active" id="pageMessages">
+      <header class="page-hdr">
+        <span class="icon page-hdr-icon">chat</span>
+        <div class="page-hdr-text">
+          <h1 class="page-title">Messages</h1>
+          <p class="page-sub">Channel broadcasts and direct messages across your mesh</p>
         </div>
-      </div>
-      <div class="compose">
-        <div class="compose-dest" id="composeDest">
-          <span class="icon sm" style="color:var(--label-4)">send</span>
-          <strong id="composeDestLabel">Select a conversation</strong>
+        <div class="stat-bar" id="statBar">
+          <span class="stat-chip">Nodes <span class="v" id="scNodes">0</span></span>
+          <span class="stat-chip">Online <span class="v" id="scOnline">0</span></span>
+          <span class="stat-chip">SNR <span class="v" id="scSnr">--</span> dB</span>
+          <span class="stat-chip">RSSI <span class="v" id="scRssi">--</span> dBm</span>
         </div>
-        <div class="compose-row">
-          <div class="compose-field">
-            <input class="compose-inp" id="compInp" placeholder="Message" disabled
-              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}">
+      </header>
+
+      <div class="page-body split" id="tabPaneMessages">
+        <!-- Conversation list -->
+        <div class="conv-col" id="panelSidebar">
+          <div class="filter-seg">
+            <button class="fseg active" id="ftAll" onclick="setFilter('all')">All</button>
+            <button class="fseg" id="ftOnline" onclick="setFilter('online')">Online</button>
           </div>
-          <button class="btn-send" id="sendBtn" onclick="sendMsg()" disabled>
-            <span class="icon filled">send</span>
+          <div class="chat-list" id="chatList"></div>
+          <button class="conv-new" onclick="navigate('peers')">
+            <span class="icon sm">person_add</span> New direct message
           </button>
         </div>
-      </div>
-    </div>
 
-    <!-- CHANNELS TAB -->
-    <div class="tab-pane" id="tabPaneChannels">
-      <div class="channels-list" id="channelsList">
-        <div class="ch-empty">
-          <span class="icon">hub</span>
-          <div>Connect to see your channels</div>
+        <!-- Thread -->
+        <div class="chat-panel" id="panelChat">
+          <div class="chat-header">
+            <div class="ch-avi" id="chAvi"><span class="icon" style="color:var(--label-3)">forum</span></div>
+            <div class="ch-info">
+              <div class="ch-name" id="chName">Select a conversation</div>
+              <div class="ch-sub" id="chSub">Pick a channel or peer on the left</div>
+            </div>
+          </div>
+          <div class="msg-feed" id="msgFeed"></div>
+          <div class="compose">
+            <div class="compose-dest" id="composeDest">
+              <span class="icon sm" style="color:var(--label-4)">send</span>
+              <strong id="composeDestLabel">Select a conversation</strong>
+            </div>
+            <div class="compose-row">
+              <div class="compose-field">
+                <input class="compose-inp" id="compInp" placeholder="Message" disabled
+                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}">
+              </div>
+              <button class="btn-send" id="sendBtn" onclick="sendMsg()" disabled>
+                <span class="icon filled">send</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
+    </section>
+
+    <!-- ── MAP ── -->
+    <section class="page" id="pageMap">
+      <header class="page-hdr">
+        <span class="icon page-hdr-icon">map</span>
+        <div class="page-hdr-text">
+          <h1 class="page-title">Map</h1>
+          <p class="page-sub">Live positions reported by nodes on your mesh</p>
+        </div>
+        <div class="map-pills">
+          <div class="map-pill"><span class="icon sm" style="color:var(--label-3)">device_hub</span> <span class="v" id="mNodes">0</span></div>
+          <div class="map-pill"><span class="icon sm" style="color:var(--label-3)">location_on</span> <span class="v" id="mOnMap">0</span></div>
+        </div>
+      </header>
+      <div class="page-body">
+        <div class="map-panel" id="panelMap">
+          <div class="map-body">
+            <div id="map"></div>
+            <div class="map-legend">
+              <div class="ml-title">Signal</div>
+              <div class="ml-row"><div class="ml-dot" style="background:var(--sig-ex);box-shadow:0 0 5px var(--sig-ex)"></div>Excellent &ge;&minus;100 dBm</div>
+              <div class="ml-row"><div class="ml-dot" style="background:var(--sig-gd)"></div>Good &minus;110 to &minus;100</div>
+              <div class="ml-row"><div class="ml-dot" style="background:var(--sig-ok)"></div>Fair &minus;120 to &minus;110</div>
+              <div class="ml-row"><div class="ml-dot" style="background:var(--sig-bad)"></div>Poor &lt;&minus;120 dBm</div>
+              <div class="ml-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--separator)"><div class="ml-dot" style="background:var(--red);opacity:.4"></div>Offline node</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── PEERS ── -->
+    <section class="page" id="pagePeers">
+      <header class="page-hdr">
+        <span class="icon page-hdr-icon">group</span>
+        <div class="page-hdr-text">
+          <h1 class="page-title">Peers</h1>
+          <p class="page-sub">Every node your radio has heard, with signal, battery and last contact</p>
+        </div>
+        <div class="filter-seg compact">
+          <button class="fseg active" id="pfAll" onclick="setPeerFilter('all')">All</button>
+          <button class="fseg" id="pfOnline" onclick="setPeerFilter('online')">Online</button>
+        </div>
+      </header>
+      <div class="page-body">
+        <div class="peers-scroll" id="peersList"></div>
+      </div>
+    </section>
+
+    <!-- ── CHANNELS ── -->
+    <section class="page" id="pageChannels">
+      <header class="page-hdr">
+        <span class="icon page-hdr-icon">hub</span>
+        <div class="page-hdr-text">
+          <h1 class="page-title">Channels</h1>
+          <p class="page-sub">Channels configured on your node — open one to broadcast to the mesh</p>
+        </div>
+      </header>
+      <div class="page-body" id="tabPaneChannels">
+        <div class="channels-list" id="channelsList"></div>
+      </div>
+    </section>
+
+    <!-- ── CONFIG ── -->
+    <section class="page" id="pageConfig">
+      <header class="page-hdr">
+        <span class="icon page-hdr-icon">settings</span>
+        <div class="page-hdr-text">
+          <h1 class="page-title">Config</h1>
+          <p class="page-sub">Read and write settings on the connected radio</p>
+        </div>
+        <button class="btn-ghost" onclick="refreshDeviceConfig()"><span class="icon sm">refresh</span> Refresh</button>
+      </header>
+      <div class="page-body">
+        <div class="cfg-tabs" id="cfgTabs">
+          <button class="cfg-tab active" data-cfg="device" onclick="setConfigTab('device')">Device</button>
+          <button class="cfg-tab" data-cfg="position" onclick="setConfigTab('position')">Position</button>
+          <button class="cfg-tab" data-cfg="power" onclick="setConfigTab('power')">Power</button>
+          <button class="cfg-tab" data-cfg="network" onclick="setConfigTab('network')">Network</button>
+          <button class="cfg-tab" data-cfg="display" onclick="setConfigTab('display')">Display</button>
+          <button class="cfg-tab" data-cfg="lora" onclick="setConfigTab('lora')">LoRa</button>
+          <button class="cfg-tab" data-cfg="bluetooth" onclick="setConfigTab('bluetooth')">Bluetooth</button>
+          <button class="cfg-tab" data-cfg="module" onclick="setConfigTab('module')">Module</button>
+        </div>
+        <div class="cfg-scroll" id="cfgBody"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ══ SHARED NODE DETAIL DRAWER ══ -->
+  <aside class="node-detail" id="nodeDetail">
+    <div class="nd-header">
+      <span class="nd-name" id="ndName"></span>
+      <button class="nd-close icon-btn" onclick="closeNodeDetail()"><span class="icon sm">close</span></button>
     </div>
+    <div class="nd-grid" id="ndGrid"></div>
+    <div class="nd-pos" id="ndPos"></div>
+    <div class="nd-last" id="ndLast"></div>
+    <div class="nd-actions" id="ndActions"></div>
+  </aside>
+</div>
+
+<!-- First-run guided connect -->
+<div class="ov first-run" id="firstRun">
+  <div class="fr-card">
+    <div class="fr-icon"><span class="icon filled" style="color:#fff;font-size:28px">cell_tower</span></div>
+    <h2 class="fr-title">Connect to your Meshtastic node</h2>
+    <p class="fr-body">Meshnatter talks to a node on your local network over Wi-Fi. Enter the IP address your
+      radio shows on its screen (or the one your router assigned it) and Meshnatter will load your mesh.</p>
+    <div class="fr-field">
+      <label class="fr-label" for="frIp">Node IP address</label>
+      <input class="fr-input" id="frIp" placeholder="192.168.1.103" value="192.168.1.103"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();firstRunConnect()}">
+    </div>
+    <div class="fr-field">
+      <label class="fr-label">Port</label>
+      <div class="port-sel bare">
+        <label class="port-opt"><input type="radio" name="frPort" value="80" checked onchange="setPort(80)"><span>80</span></label>
+        <label class="port-opt"><input type="radio" name="frPort" value="4403" onchange="setPort(4403)"><span>4403</span></label>
+      </div>
+    </div>
+    <button class="fr-cta" id="frBtn" onclick="firstRunConnect()">Connect to node</button>
+    <button class="fr-skip" onclick="dismissFirstRun()">Look around first</button>
   </div>
 </div>
 
@@ -171,6 +293,17 @@
       <button class="mx" onclick="document.getElementById('jsonOv').classList.remove('show')"><span class="icon sm">close</span></button>
     </div>
     <div class="mbd"><pre class="jp" id="jsonPre"></pre></div>
+  </div>
+</div>
+
+<!-- Server console overlay -->
+<div class="ov" id="consoleOv" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal" style="width:640px;height:70vh">
+    <div class="mhd">
+      <span class="mt">Server console</span>
+      <button class="mx" onclick="document.getElementById('consoleOv').classList.remove('show')"><span class="icon sm">close</span></button>
+    </div>
+    <div class="mbd"><pre class="jp" id="consolePre">Waiting for server output…</pre></div>
   </div>
 </div>
 
