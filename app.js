@@ -199,7 +199,8 @@ function handle(msg) {
       const idx=pushConv(tabId, {
         fromNum:S.myNodeNum, fromName:'You',
         text:msg.text, ts:new Date(), mine:true,
-        packetId:msg.packetId, status:'sent'
+        packetId:msg.packetId, status:'sent',
+        destinationNum:msg.destinationNum||null
       });
       S.msgIndex[msg.packetId]={tabId, idx};
       break;
@@ -213,23 +214,30 @@ function handle(msg) {
           const m=conv[ref.idx];
           const via=S.nodes[msg.fromNum]?.name||msg.fromId;
           if(msg.ackStatus==='ack'){
-            m.status='ack'; m.statusVia=via;
-            toast('Delivered via '+via,'ok');
+            // A DM is only "finally" acknowledged once the intended recipient itself
+            // responds — any other node's ack along the way is just relay confirmation.
+            const isFinal = m.destinationNum==null || msg.fromNum===m.destinationNum;
+            if(m.status!=='ack-final'){
+              m.status = isFinal ? 'ack-final' : 'ack';
+              m.ackFrom = via;
+              m.ackTs = new Date();
+              if(isFinal) toast('Acknowledged by '+via,'ok');
+            }
           } else {
-            m.status='nack'; m.statusError=msg.errorCode;
-            // Map error codes to readable labels
             const errLabels={
               'NO_ROUTE':'No route to node',
               'TIMEOUT':'Timed out',
               'NO_INTERFACE':'No radio interface',
-              'MAX_RETRANSMIT':'Max retransmissions reached',
+              'MAX_RETRANSMIT':'Max Retransmission Reached',
               'BAD_REQUEST':'Bad request',
               'NOT_AUTHORIZED':'Not authorised',
               'PKT_TOO_LARGE':'Packet too large',
             };
-            const errMsg=errLabels[msg.errorCode]||msg.errorCode||'Unknown error';
-            m.statusLabel=errMsg;
-            toast(errMsg,'err');
+            m.status = msg.errorCode==='MAX_RETRANSMIT' ? 'maxretransmit' : 'nack';
+            m.statusError=msg.errorCode;
+            m.statusLabel=errLabels[msg.errorCode]||msg.errorCode||'Unknown error';
+            m.ackTs = new Date();
+            toast(m.statusLabel,'err');
           }
           if(S.activeTab===ref.tabId) renderMessages();
         }
@@ -483,11 +491,11 @@ function renderPeers(){
 }
 
 function tickPreview(status){
-  if(!status||status==='pending') return '<span class="icon sm" style="color:var(--label-3);font-size:12px">schedule</span> ';
-  if(status==='sent')   return '<span class="icon sm" style="color:var(--label-3);font-size:12px">done</span> ';
-  if(status==='ack')    return '<span class="icon sm" style="color:var(--tick-blue);font-size:12px">done_all</span> ';
-  if(status==='nack')   return '<span class="icon sm" style="color:var(--red);font-size:12px">error_outline</span> ';
-  return '';
+  if(!status||status==='pending'||status==='sent')
+    return '<span class="icon sm" style="color:var(--label-3);font-size:12px">schedule</span> ';
+  if(status==='ack')       return '<span class="icon sm" style="color:var(--amber);font-size:12px">done_all</span> ';
+  if(status==='ack-final') return '<span class="icon sm" style="color:var(--label-3);font-size:12px">done_all</span> ';
+  return '<span class="icon sm" style="color:var(--red);font-size:12px">error_outline</span> '; // nack / maxretransmit
 }
 
 // ── CHAT HEADER ───────────────────────────────────────────────────
@@ -557,22 +565,24 @@ function renderMessages(){
     let tickHtml='';
     if(m.mine){
       if(st==='pending') tickHtml=`<span class="ticks pending"><span class="icon sm">schedule</span></span>`;
-      else if(st==='sent') tickHtml=`<span class="ticks sent"><span class="icon sm">done</span></span>`;
+      else if(st==='sent') tickHtml=`<span class="ticks sent"><span class="icon sm">schedule</span></span>`;
       else if(st==='ack')  tickHtml=`<span class="ticks ack"><span class="icon sm">done_all</span></span>`;
-      else if(st==='nack') tickHtml=`<span class="ticks nack"><span class="icon sm">error_outline</span></span>`;
+      else if(st==='ack-final') tickHtml=`<span class="ticks ack-final"><span class="icon sm">done_all</span></span>`;
+      else tickHtml=`<span class="ticks nack"><span class="icon sm">error_outline</span></span>`;
     }
 
-    // Status line below bubble
+    // Status line below bubble — mirrors the official Meshtastic app's wording
     let statusLine='';
     if(m.mine){
       const labels={
-        pending:`<span class="icon sm">schedule</span> Sending…`,
-        sent:   `<span class="icon sm">done</span> Sent`,
-        ack:    `<span class="icon sm">done_all</span> Delivered`+(m.statusVia?' via '+esc(m.statusVia):''),
-        nack:   `<span class="icon sm">error_outline</span> `+(m.statusLabel||m.statusError||'Failed'),
-        relayed:`<span class="icon sm">sync</span> Relayed`,
+        pending:      `<span class="icon sm">schedule</span> Sending…`,
+        sent:         `<span class="icon sm">schedule</span> Waiting to be acknowledged…`,
+        ack:          `<span class="icon sm">done_all</span> Acknowledged`,
+        'ack-final':  `<span class="icon sm">done_all</span> Acknowledged`,
+        maxretransmit:`<span class="icon sm">error_outline</span> Max Retransmission Reached`,
+        nack:         `<span class="icon sm">error_outline</span> `+(m.statusLabel||m.statusError||'Failed'),
       };
-      statusLine=`<div class="msg-status-line ${st}">${labels[st]||''}</div>`;
+      statusLine=`<div class="msg-status-line ${st}" onclick="showMessageDetails('${S.activeTab}',${msgs.indexOf(m)})" title="Message details">${labels[st]||''}</div>`;
     }
 
     // Incoming signal info
@@ -601,6 +611,33 @@ function renderMessages(){
 
   feed.innerHTML=html;
   feed.scrollTop=feed.scrollHeight;
+}
+
+// ── MESSAGE DETAILS (desktop equivalent of the mobile app's long-press) ──
+function showMessageDetails(tabId, idx){
+  const m=(S.conversations[tabId]||[])[idx];
+  if(!m||!m.mine) return;
+
+  const rows=[['Sent', m.ts.toLocaleString()]];
+  if(m.status==='ack'||m.status==='ack-final'){
+    rows.push(['Acknowledged', 'Yes']);
+    rows.push(['Acknowledged by', esc(m.ackFrom||'Unknown node')]);
+    if(m.ackTs) rows.push(['Acknowledged at', m.ackTs.toLocaleString()]);
+    rows.push(['Type', m.status==='ack-final' ? 'Confirmed by recipient' : 'Relayed by the mesh']);
+  } else if(m.status==='maxretransmit'){
+    rows.push(['Acknowledged', 'No']);
+    rows.push(['Result', 'Max Retransmission Reached']);
+  } else if(m.status==='nack'){
+    rows.push(['Acknowledged', 'No']);
+    rows.push(['Error', esc(m.statusLabel||m.statusError||'Unknown error')]);
+  } else {
+    rows.push(['Acknowledged', 'Waiting…']);
+  }
+
+  document.getElementById('mdBody').innerHTML = rows.map(([l,v]) =>
+    `<div class="cfg-row"><div class="cfg-row-text"><div class="cfg-label">${esc(l)}</div></div><div class="cfg-control">${v}</div></div>`
+  ).join('');
+  document.getElementById('mdOv').classList.add('show');
 }
 
 function sendMsg(){

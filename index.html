@@ -335,6 +335,17 @@
   </div>
 </div>
 
+<!-- Message details overlay -->
+<div class="ov" id="mdOv" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal" style="width:400px">
+    <div class="mhd">
+      <span class="mt">Message details</span>
+      <button class="mx" onclick="document.getElementById('mdOv').classList.remove('show')"><span class="icon sm">close</span></button>
+    </div>
+    <div class="mbd" id="mdBody"></div>
+  </div>
+</div>
+
 <!-- JSON overlay -->
 <div class="ov" id="jsonOv" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal" style="width:440px">

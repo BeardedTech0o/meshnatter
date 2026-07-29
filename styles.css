@@ -228,18 +228,21 @@ html, body { height:100vh; overflow:hidden; background:var(--bg); color:var(--la
 /* Tick marks */
 .ticks { display:flex; align-items:center; }
 .ticks .icon { font-size:14px; }
-.ticks.pending .icon  { color:rgba(255,255,255,.5); }
-.ticks.sent .icon     { color:rgba(255,255,255,.7); }
-.ticks.ack .icon      { color:var(--tick-blue); }
-.ticks.nack .icon     { color:var(--red); }
+.ticks.pending .icon    { color:rgba(255,255,255,.5); }
+.ticks.sent .icon       { color:rgba(255,255,255,.7); }
+.ticks.ack .icon        { color:var(--amber); }
+.ticks.ack-final .icon  { color:rgba(255,255,255,.7); }
+.ticks.nack .icon       { color:var(--red); }
 
 /* Status line below bubble */
-.msg-status-line { font-size:11px; margin-top:3px; display:flex; align-items:center; gap:4px; }
+.msg-status-line { font-size:11px; margin-top:3px; display:flex; align-items:center; gap:4px; cursor:pointer; width:fit-content; }
+.msg-status-line:hover   { text-decoration:underline; }
 .msg-status-line.pending { color:var(--label-3); }
 .msg-status-line.sent    { color:var(--label-3); }
-.msg-status-line.ack     { color:var(--green); }
-.msg-status-line.nack    { color:var(--red); }
-.msg-status-line.relayed { color:var(--amber); }
+.msg-status-line.ack     { color:var(--amber); }
+.msg-status-line.ack-final { color:var(--label-3); }
+.msg-status-line.nack,
+.msg-status-line.maxretransmit { color:var(--red); }
 .msg-status-line .icon   { font-size:13px; }
 
 /* Incoming signal info */
