@@ -178,7 +178,9 @@ function createWindow(port) {
   mainWindow.setMenuBarVisibility(false);
 
 
-  mainWindow.loadFile(indexPath);
+  // Pass the port in the URL too — the renderer has no Node access, so
+  // process.argv is not always readable there.
+  mainWindow.loadFile(indexPath, { query: { wsPort: String(port) } });
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();

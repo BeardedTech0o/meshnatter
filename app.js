@@ -29,6 +29,11 @@ function getWSPort() {
       }
     }
   } catch {}
+  // Electron main also passes the port as a query string on the file:// URL
+  try {
+    const q = new URLSearchParams(location.search).get('wsPort');
+    if (q && /^\d+$/.test(q)) return parseInt(q);
+  } catch {}
   // Fallback for HTTP mode (dev)
   if (location.port) return parseInt(location.port);
   return 3000;
