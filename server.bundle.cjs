@@ -13627,10 +13627,18 @@ var utils_exports = __export({
 });
 
 // server/server.js
-var { Mesh, Portnums, Telemetry, Channel: ChannelPb } = dist_exports;
+var { Mesh, Portnums, Telemetry, Channel: ChannelPb, Admin, Config: ConfigNs } = dist_exports;
 var { FromRadioSchema: FromRadioSchema2, ToRadioSchema: ToRadioSchema2, MeshPacketSchema: MeshPacketSchema2, PositionSchema: PositionSchema2, UserSchema: UserSchema2, RoutingSchema: RoutingSchema2, Routing_Error: Routing_Error2 } = Mesh;
 var { PortNum: PortNum2 } = Portnums;
 var { TelemetrySchema: TelemetrySchema2 } = Telemetry;
+var { AdminMessageSchema: AdminMessageSchema2, AdminMessage_ConfigType: AdminMessage_ConfigType2 } = Admin;
+var {
+  ConfigSchema: ConfigSchema2,
+  Config_DeviceConfigSchema: Config_DeviceConfigSchema2,
+  Config_DeviceConfig_Role: Config_DeviceConfig_Role2,
+  Config_DeviceConfig_RebroadcastMode: Config_DeviceConfig_RebroadcastMode2,
+  Config_DeviceConfig_BuzzerMode: Config_DeviceConfig_BuzzerMode2
+} = ConfigNs;
 var SERVER_PORT = parseInt(process.env.MESHNATTER_PORT || "3000");
 var POLL_MS = 400;
 var HEARTBEAT_MS = 8e3;
@@ -13649,6 +13657,10 @@ var active = false;
 var polling = false;
 var pollErrors = 0;
 var reconnectTimer = null;
+var myNodeNum = null;
+var sessionPasskey = null;
+var lastDeviceConfig = null;
+var configRefreshTimer = null;
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
   wss.clients.forEach((c) => {
@@ -13691,6 +13703,111 @@ async function sendHeartbeat() {
   } catch {
   }
 }
+function enumOptions(enumObj) {
+  return Object.entries(enumObj).filter(([k]) => /^\d+$/.test(k)).map(([k, v]) => ({ value: Number(k), name: String(v) })).sort((a, b) => a.value - b.value);
+}
+var CONFIG_ENUMS = {
+  role: enumOptions(Config_DeviceConfig_Role2),
+  rebroadcastMode: enumOptions(Config_DeviceConfig_RebroadcastMode2),
+  buzzerMode: enumOptions(Config_DeviceConfig_BuzzerMode2)
+};
+var DEVICE_FIELDS = {
+  role: "int",
+  rebroadcastMode: "int",
+  buzzerMode: "int",
+  buttonGpio: "int",
+  buzzerGpio: "int",
+  nodeInfoBroadcastSecs: "int",
+  serialEnabled: "bool",
+  doubleTapAsButtonPress: "bool",
+  isManaged: "bool",
+  disableTripleClick: "bool",
+  ledHeartbeatDisabled: "bool",
+  tzdef: "string"
+};
+function deviceConfigToJson(dev) {
+  const out = {};
+  for (const key of Object.keys(DEVICE_FIELDS)) {
+    const v = dev?.[key];
+    if (DEVICE_FIELDS[key] === "int")
+      out[key] = Number(v ?? 0);
+    else if (DEVICE_FIELDS[key] === "bool")
+      out[key] = !!v;
+    else
+      out[key] = String(v ?? "");
+  }
+  return out;
+}
+function publishDeviceConfig(dev, source) {
+  lastDeviceConfig = deviceConfigToJson(dev);
+  broadcast({ type: "deviceConfig", source, config: lastDeviceConfig, enums: CONFIG_ENUMS });
+}
+async function sendAdmin(variantCase, variantValue, wantResponse = false) {
+  if (!active)
+    throw new Error("Not connected to a node");
+  if (myNodeNum == null)
+    throw new Error("Node identity not known yet \u2014 wait for the mesh to finish loading");
+  const admin = create(AdminMessageSchema2, {
+    ...sessionPasskey?.length ? { sessionPasskey } : {},
+    payloadVariant: { case: variantCase, value: variantValue }
+  });
+  const packetId = Math.floor(Math.random() * 2147483646) + 1;
+  const mp = create(MeshPacketSchema2, {
+    id: packetId,
+    to: myNodeNum,
+    channel: 0,
+    decoded: {
+      portnum: PortNum2.ADMIN_APP,
+      payload: toBinary(AdminMessageSchema2, admin),
+      wantResponse
+    },
+    wantAck: false,
+    hopLimit: 0
+  });
+  await httpPut(
+    `${nodeBaseUrl()}/api/v1/toradio`,
+    toBinary(ToRadioSchema2, create(ToRadioSchema2, { payloadVariant: { case: "packet", value: mp } }))
+  );
+  return packetId;
+}
+async function requestDeviceConfig() {
+  await sendAdmin("getConfigRequest", AdminMessage_ConfigType2.DEVICE_CONFIG, true);
+  log("Device config requested");
+}
+async function setDeviceConfig(patch) {
+  if (!patch || typeof patch !== "object")
+    throw new Error("No config supplied");
+  const merged = { ...lastDeviceConfig || {} };
+  for (const [key, kind] of Object.entries(DEVICE_FIELDS)) {
+    if (!(key in patch))
+      continue;
+    const raw = patch[key];
+    if (kind === "int") {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0 || n > 4294967295)
+        throw new Error(`Invalid value for ${key}`);
+      merged[key] = Math.floor(n);
+    } else if (kind === "bool") {
+      merged[key] = !!raw;
+    } else {
+      if (typeof raw !== "string" || raw.length > 64)
+        throw new Error(`Invalid value for ${key}`);
+      merged[key] = raw;
+    }
+  }
+  const device = create(Config_DeviceConfigSchema2, merged);
+  const config = create(ConfigSchema2, { payloadVariant: { case: "device", value: device } });
+  await sendAdmin("beginEditSettings", true);
+  await sendAdmin("setConfig", config);
+  await sendAdmin("commitEditSettings", true);
+  lastDeviceConfig = deviceConfigToJson(device);
+  log("Device config written");
+  clearTimeout(configRefreshTimer);
+  configRefreshTimer = setTimeout(() => {
+    requestDeviceConfig().catch(() => {
+    });
+  }, 3e3);
+}
 function handleFromRadio(bytes) {
   if (!bytes?.length)
     return;
@@ -13704,7 +13821,8 @@ function handleFromRadio(bytes) {
     return;
   const { case: kind, value: val } = pkt.payloadVariant;
   if (kind === "myInfo") {
-    broadcast({ type: "myInfo", myNodeNum: Number(val.myNodeNum) });
+    myNodeNum = Number(val.myNodeNum);
+    broadcast({ type: "myInfo", myNodeNum });
   } else if (kind === "nodeInfo") {
     const n = val;
     broadcast({ type: "node", node: {
@@ -13724,6 +13842,9 @@ function handleFromRadio(bytes) {
       hopsAway: n.hopsAway ?? null,
       lastHeard: n.lastHeard ? new Date(Number(n.lastHeard) * 1e3).toISOString() : null
     } });
+  } else if (kind === "config") {
+    if (val?.payloadVariant?.case === "device")
+      publishDeviceConfig(val.payloadVariant.value, "stream");
   } else if (kind === "channel") {
     const ch = val;
     if (ch.role === 0)
@@ -13771,6 +13892,18 @@ function handleFromRadio(bytes) {
         const tel = fromBinary(TelemetrySchema2, decoded.payload);
         const dm = tel.variant?.case === "deviceMetrics" ? tel.variant.value : null;
         broadcast({ type: "telemetry", fromNum: from, fromId: numToId(from), batteryLevel: dm?.batteryLevel ?? null, voltage: dm?.voltage ? (dm.voltage / 1e3).toFixed(2) : null, chUtil: dm?.channelUtilization ?? null, airUtil: dm?.airUtilTx ?? null, rxRssi, rxSnr });
+      } catch {
+      }
+    } else if (decoded.portnum === PortNum2.ADMIN_APP) {
+      try {
+        const am = fromBinary(AdminMessageSchema2, decoded.payload);
+        if (am.sessionPasskey?.length)
+          sessionPasskey = am.sessionPasskey;
+        if (am.payloadVariant?.case === "getConfigResponse") {
+          const cfg = am.payloadVariant.value;
+          if (cfg?.payloadVariant?.case === "device")
+            publishDeviceConfig(cfg.payloadVariant.value, "admin");
+        }
       } catch {
       }
     } else if (decoded.portnum === PortNum2.NODEINFO_APP) {
@@ -13896,6 +14029,11 @@ function doDisconnect(silent = false) {
   active = false;
   pollErrors = 0;
   nodeHost = null;
+  myNodeNum = null;
+  sessionPasskey = null;
+  lastDeviceConfig = null;
+  clearTimeout(configRefreshTimer);
+  configRefreshTimer = null;
   stopTimers();
   if (!silent)
     broadcast({ type: "disconnected" });
@@ -13914,6 +14052,21 @@ wss.on("connection", (ws) => {
       await doConnect(msg.ip, msg.port || 80);
     } else if (msg.type === "disconnect") {
       doDisconnect();
+    } else if (msg.type === "getDeviceConfig") {
+      if (lastDeviceConfig)
+        ws.send(JSON.stringify({ type: "deviceConfig", source: "cache", config: lastDeviceConfig, enums: CONFIG_ENUMS }));
+      try {
+        await requestDeviceConfig();
+      } catch (e) {
+        ws.send(JSON.stringify({ type: "configResult", ok: false, action: "read", error: e.message }));
+      }
+    } else if (msg.type === "setDeviceConfig") {
+      try {
+        await setDeviceConfig(msg.config);
+        broadcast({ type: "configResult", ok: true, action: "write" });
+      } catch (e) {
+        ws.send(JSON.stringify({ type: "configResult", ok: false, action: "write", error: e.message }));
+      }
     } else if (msg.type === "sendMessage") {
       try {
         const id = await sendText(msg.text, msg.destinationNum ?? null, msg.channelIndex ?? 0);
