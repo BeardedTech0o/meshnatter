@@ -1,0 +1,77 @@
+{
+  "name": "meshnatter",
+  "version": "1.0.0",
+  "description": "Meshnatter — Meshtastic Network Monitor",
+  "main": "main.js",
+  "type": "commonjs",
+  "author": "Meshnatter",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "bundle": "node bundle.mjs",
+    "start": "electron .",
+    "dist": "node bundle.mjs && electron-builder --win --x64"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.12.0",
+    "@meshtastic/core": "2.6.7",
+    "@meshtastic/transport-node": "0.0.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "esbuild": "^0.20.2"
+  },
+  "build": {
+    "appId": "com.meshnatter.app",
+    "productName": "Meshnatter",
+    "asar": true,
+    "compression": "maximum",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "index.html",
+      "styles.css",
+      "app.js",
+      "server.bundle.cjs",
+      "package.json",
+      "assets/**",
+      "!node_modules/**",
+      "!server/**",
+      "!dist/**",
+      "!.git/**",
+      "!**/*.bat",
+      "!bundle.mjs",
+      "!package-lock.json",
+      "!**/*.md"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Meshnatter",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "artifactName": "Meshnatter-Setup-${version}.${ext}"
+    }
+  }
+}
