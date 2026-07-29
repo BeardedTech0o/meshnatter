@@ -92,6 +92,9 @@
       <button class="rail-btn" onclick="showLanguages()" title="Language">
         <span class="icon sm">language</span>
       </button>
+      <button class="rail-btn" id="navBtnSettings" onclick="navigate('settings')" title="Settings">
+        <span class="icon sm">tune</span>
+      </button>
       <span class="rail-spacer"></span>
       <button class="rail-btn" onclick="window.open('https://meshtastic.org/docs/')" title="Meshtastic docs">
         <span class="icon sm">help</span>
@@ -232,7 +235,7 @@
         </div>
         <button class="btn-ghost" onclick="refreshDeviceConfig()"><span class="icon sm">refresh</span> Refresh</button>
       </header>
-      <div class="page-body">
+      <div class="page-body stacked">
         <div class="cfg-tabs" id="cfgTabs">
           <button class="cfg-tab active" data-cfg="device" onclick="setConfigTab('device')">Device</button>
           <button class="cfg-tab" data-cfg="position" onclick="setConfigTab('position')">Position</button>
@@ -246,19 +249,66 @@
         <div class="cfg-scroll" id="cfgBody"></div>
       </div>
     </section>
+
+    <!-- ── APP SETTINGS ── -->
+    <section class="page" id="pageSettings">
+      <header class="page-hdr">
+        <span class="icon page-hdr-icon">tune</span>
+        <div class="page-hdr-text">
+          <h1 class="page-title">Settings</h1>
+          <p class="page-sub">Meshnatter app preferences — this is separate from your radio's Device Config</p>
+        </div>
+      </header>
+      <div class="page-body">
+        <div class="cfg-scroll">
+          <div class="cfg-wrap">
+            <div class="card">
+              <div class="card-hd">
+                <div>
+                  <h2 class="card-title">Accent colour</h2>
+                  <p class="card-desc">Used for the active navigation item, buttons and highlights throughout Meshnatter.</p>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="accent-grid" id="accentGrid"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-hd">
+                <div>
+                  <h2 class="card-title">Theme</h2>
+                  <p class="card-desc">Switch between light and dark mode.</p>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="filter-seg compact" style="margin:0;max-width:240px">
+                  <button class="fseg" id="themeSegDark" onclick="applyTheme('dark')">Dark</button>
+                  <button class="fseg" id="themeSegLight" onclick="applyTheme('light')">Light</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
-  <!-- ══ SHARED NODE DETAIL DRAWER ══ -->
-  <aside class="node-detail" id="nodeDetail">
-    <div class="nd-header">
-      <span class="nd-name" id="ndName"></span>
-      <button class="nd-close icon-btn" onclick="closeNodeDetail()"><span class="icon sm">close</span></button>
+</div>
+
+<!-- ══ SHARED NODE DETAIL POPOVER ══ -->
+<div class="ov" id="nodeDetail" onclick="if(event.target===this)closeNodeDetail()">
+  <div class="modal nd-modal">
+    <div class="mhd">
+      <span class="mt" id="ndName"></span>
+      <button class="mx" onclick="closeNodeDetail()"><span class="icon sm">close</span></button>
     </div>
-    <div class="nd-grid" id="ndGrid"></div>
-    <div class="nd-pos" id="ndPos"></div>
-    <div class="nd-last" id="ndLast"></div>
-    <div class="nd-actions" id="ndActions"></div>
-  </aside>
+    <div class="mbd">
+      <div class="nd-grid" id="ndGrid"></div>
+      <div class="nd-pos" id="ndPos"></div>
+      <div class="nd-last" id="ndLast"></div>
+      <div class="nd-actions" id="ndActions"></div>
+    </div>
+  </div>
 </div>
 
 <!-- First-run guided connect -->

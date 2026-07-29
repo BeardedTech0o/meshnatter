@@ -7,7 +7,7 @@ const S = {
   filter:'all', startTime:null, selectedNode:null,
   uptimeTimer:null, wsTimer:null,
   // UI shell state
-  page:'messages', peerFilter:'all', everConnected:false,
+  page:'messages', peerFilter:'all', everConnected:false, accent:'blue',
   // Device config state
   deviceConfig:null, configEnums:null, configTab:'device', configDirty:false,
   logs:[],
@@ -860,6 +860,7 @@ const PAGES = {
   config:   { section:'pageConfig',   nav:'navBtnConfig' },
   channels: { section:'pageChannels', nav:'tabBtnChannels' },
   peers:    { section:'pagePeers',    nav:'navBtnPeers' },
+  settings: { section:'pageSettings', nav:'navBtnSettings' },
 };
 
 function navigate(page) {
@@ -877,6 +878,7 @@ function navigate(page) {
   if (page === 'channels') { clearBadge('tabBadgeChannels'); renderChannelsList(); }
   if (page === 'peers')    renderPeers();
   if (page === 'config')   renderConfigPage();
+  if (page === 'settings') renderSettingsPage();
   if (page === 'map' && typeof map !== 'undefined') setTimeout(() => map.invalidateSize(), 80);
 }
 
@@ -964,11 +966,49 @@ function applyTheme(theme) {
   if (ic) ic.textContent = light ? 'dark_mode' : 'light_mode';
   const btn = document.getElementById('railTheme');
   if (btn) btn.title = light ? 'Switch to dark theme' : 'Switch to light theme';
+  const segDark = document.getElementById('themeSegDark');
+  const segLight = document.getElementById('themeSegLight');
+  if (segDark) segDark.classList.toggle('active', !light);
+  if (segLight) segLight.classList.toggle('active', light);
   try { localStorage.setItem('mn_theme', light ? 'light' : 'dark'); } catch {}
+  if (typeof map !== 'undefined') setTimeout(() => map.invalidateSize(), 60);
 }
 function toggleTheme() {
   applyTheme(document.body.classList.contains('theme-light') ? 'dark' : 'light');
-  if (typeof map !== 'undefined') setTimeout(() => map.invalidateSize(), 60);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SETTINGS — accent colour
+// ══════════════════════════════════════════════════════════════════
+const ACCENT_COLORS = [
+  { id:'blue',   name:'Blue',          hex:'#0a84ff' },
+  { id:'purple', name:'Purple',        hex:'#bf5af2' },
+  { id:'pink',   name:'Pink',          hex:'#ff375f' },
+  { id:'orange', name:'Orange',        hex:'#ff9f0a' },
+  { id:'teal',   name:'Teal',         hex:'#20c9b0' },
+  { id:'lime',   name:'Electric lime', hex:'#c6ff2e' },
+];
+
+function applyAccent(id) {
+  const c = ACCENT_COLORS.find(a => a.id === id) || ACCENT_COLORS[0];
+  document.documentElement.style.setProperty('--accent', c.hex);
+  S.accent = c.id;
+  try { localStorage.setItem('mn_accent', c.id); } catch {}
+  document.querySelectorAll('.accent-swatch').forEach(el => el.classList.toggle('active', el.dataset.accent === c.id));
+}
+function setAccent(id) { applyAccent(id); }
+
+function renderSettingsPage() {
+  const el = document.getElementById('accentGrid');
+  if (!el) return;
+  el.innerHTML = ACCENT_COLORS.map(c => `
+    <div class="accent-item">
+      <button class="accent-swatch${S.accent === c.id ? ' active' : ''}" data-accent="${c.id}"
+        style="background:${c.hex}" title="${esc(c.name)}" onclick="setAccent('${c.id}')">
+        <span class="icon filled">check</span>
+      </button>
+      <span class="accent-name">${esc(c.name)}</span>
+    </div>`).join('');
 }
 
 // ── Server console ───────────────────────────────────────────────
@@ -1283,6 +1323,11 @@ function init() {
   let theme = 'dark';
   try { theme = localStorage.getItem('mn_theme') || 'dark'; } catch {}
   applyTheme(theme);
+
+  // Accent colour
+  let accent = 'blue';
+  try { accent = localStorage.getItem('mn_accent') || 'blue'; } catch {}
+  applyAccent(accent);
 
   // Remember the last node IP the user connected to
   try {
