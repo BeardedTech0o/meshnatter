@@ -18,6 +18,14 @@ where node >nul 2>&1
 if errorlevel 1 ( echo ERROR: Node.js not installed & pause & popd & exit /b 1 )
 for /f %%v in ('node --version') do echo Node: %%v
 
+where pnpm >nul 2>&1
+if errorlevel 1 (
+  echo  pnpm not found - installing it globally via npm...
+  call npm install -g pnpm
+  if errorlevel 1 ( echo ERROR: could not install pnpm & pause & popd & exit /b 1 )
+)
+for /f %%v in ('pnpm --version') do echo pnpm: %%v
+
 REM Clean everything
 echo  Cleaning...
 if exist "dist" rmdir /s /q dist
@@ -35,8 +43,8 @@ echo  main.js found OK
 
 REM Install
 echo  Installing dependencies...
-call npm install
-if errorlevel 1 ( echo npm install failed & pause & popd & exit /b 1 )
+call pnpm install --frozen-lockfile
+if errorlevel 1 ( echo pnpm install failed & pause & popd & exit /b 1 )
 
 REM Bundle
 echo.

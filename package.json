@@ -23,6 +23,15 @@
     "electron-builder": "^24.13.3",
     "esbuild": "^0.20.2"
   },
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "@meshtastic/core",
+      "@meshtastic/transport-node"
+    ]
+  },
   "build": {
     "appId": "com.meshnatter.app",
     "productName": "Meshnatter",
@@ -46,7 +55,7 @@
       "!.git/**",
       "!**/*.bat",
       "!bundle.mjs",
-      "!package-lock.json",
+      "!pnpm-lock.yaml",
       "!**/*.md"
     ],
     "win": {
