@@ -232,8 +232,9 @@ function handleFromRadio(bytes) {
           const errVal = routing.variant.value;
           if (errVal !== Routing_Error.NONE && errVal !== 0) { ackStatus = 'nack'; errorCode = Routing_Error[errVal] || `ERROR_${errVal}`; }
         }
+        log(`RX routing ack requestId=${requestId} from=${numToId(from)} status=${ackStatus}${errorCode ? ' error=' + errorCode : ''}`);
         broadcast({ type: 'ack', requestId, fromNum: from, fromId: numToId(from), ackStatus, errorCode });
-      } catch {}
+      } catch (e) { log(`RX routing packet failed to decode: ${e?.message || e}`); }
     } else if (decoded.portnum === PortNum.POSITION_APP) {
       try { const pos = fromBinary(PositionSchema, decoded.payload); broadcast({ type: 'position', fromNum: from, fromId: numToId(from), lat: pos.latitudeI ? pos.latitudeI / 1e7 : null, lon: pos.longitudeI ? pos.longitudeI / 1e7 : null, alt: pos.altitude ?? null }); } catch {}
     } else if (decoded.portnum === PortNum.TELEMETRY_APP) {
@@ -289,6 +290,7 @@ async function sendText(text, destNum, channelIndex) {
   // update no matter how many acks actually arrive.
   const packetId = Math.floor(Math.random() * 0x7ffffffe) + 1;
   const mp = create(MeshPacketSchema, { id: packetId, to: destNum ?? 0xFFFFFFFF, channel: channelIndex ?? 0, decoded: { payload: new TextEncoder().encode(text), portnum: PortNum.TEXT_MESSAGE_APP }, wantAck: true, hopLimit: 3 });
+  log(`TX text packetId=${packetId} to=${destNum ?? 'broadcast'} channel=${channelIndex ?? 0} wantAck=true`);
   await httpPut(`${nodeBaseUrl()}/api/v1/toradio`, toBinary(ToRadioSchema, create(ToRadioSchema, { payloadVariant: { case: 'packet', value: mp } })));
   return packetId;
 }
