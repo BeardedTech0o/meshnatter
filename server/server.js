@@ -445,10 +445,16 @@ async function sendAdmin(variantCase, variantValue, wantResponse = false) {
     id: packetId,
     to: myNodeNum,
     channel: 0,
-    decoded: {
-      portnum: PortNum.ADMIN_APP,
-      payload: toBinary(AdminMessageSchema, admin),
-      wantResponse,
+    // `decoded` is a member of MeshPacket's payload_variant oneof. protobuf-es
+    // v2 only accepts the {case, value} form — a bare `decoded: {...}` key is
+    // silently discarded, producing a packet with no portnum and no payload.
+    payloadVariant: {
+      case: 'decoded',
+      value: {
+        portnum: PortNum.ADMIN_APP,
+        payload: toBinary(AdminMessageSchema, admin),
+        wantResponse,
+      },
     },
     wantAck: false,
     hopLimit: 0,
@@ -549,7 +555,14 @@ function handleFromRadio(bytes) {
     const hopLimit = mp.hopLimit ?? null, hopStart = mp.hopStart ?? null;
     broadcast({ type: 'signal', fromNum: from, fromId: numToId(from), rxRssi, rxSnr, hopsAway: hopStart != null && hopLimit != null ? hopStart - hopLimit : null });
     broadcast({ type: 'lastHeard', fromNum: from, ts: new Date().toISOString() });
-    const decoded = mp.decoded; if (!decoded) return;
+    // Same oneof rule on the way in: a decoded MeshPacket exposes its Data as
+    // payloadVariant.value, never as a `.decoded` property. Reading `mp.decoded`
+    // always yielded undefined and bailed here, silently dropping every single
+    // MeshPacket — text messages, routing acks, position, telemetry and admin
+    // responses alike. (Node list/channels/config kept working because those
+    // arrive as top-level FromRadio variants, which are dispatched correctly.)
+    const decoded = mp.payloadVariant?.case === 'decoded' ? mp.payloadVariant.value : null;
+    if (!decoded) return;
     if (decoded.portnum === PortNum.TEXT_MESSAGE_APP) {
       broadcast({ type: 'message', id: Number(mp.id), fromNum: from, fromId: numToId(from), toNum: to, toId: numToId(to), channel: mp.channel ?? 0, isDM: to !== 0xFFFFFFFF, text: new TextDecoder().decode(decoded.payload), rxRssi, rxSnr, hopLimit, hopStart, rxTime: new Date().toISOString() });
     } else if (decoded.portnum === PortNum.ROUTING_APP) {
@@ -623,7 +636,20 @@ async function sendText(text, destNum, channelIndex) {
   // matches the (always-0) id we told the UI to track, so ack status can never
   // update no matter how many acks actually arrive.
   const packetId = Math.floor(Math.random() * 0x7ffffffe) + 1;
-  const mp = create(MeshPacketSchema, { id: packetId, to: destNum ?? 0xFFFFFFFF, channel: channelIndex ?? 0, decoded: { payload: new TextEncoder().encode(text), portnum: PortNum.TEXT_MESSAGE_APP }, wantAck: true, hopLimit: 3 });
+  // `decoded` is a member of MeshPacket's payload_variant oneof — it must use
+  // the {case, value} form. A bare `decoded: {...}` key is silently discarded by
+  // protobuf-es v2, which sent the message out with no portnum and no text.
+  const mp = create(MeshPacketSchema, {
+    id: packetId,
+    to: destNum ?? 0xFFFFFFFF,
+    channel: channelIndex ?? 0,
+    payloadVariant: {
+      case: 'decoded',
+      value: { payload: new TextEncoder().encode(text), portnum: PortNum.TEXT_MESSAGE_APP },
+    },
+    wantAck: true,
+    hopLimit: 3,
+  });
   log(`TX text packetId=${packetId} to=${destNum ?? 'broadcast'} channel=${channelIndex ?? 0} wantAck=true`);
   await httpPut(`${nodeBaseUrl()}/api/v1/toradio`, toBinary(ToRadioSchema, create(ToRadioSchema, { payloadVariant: { case: 'packet', value: mp } })));
   return packetId;
