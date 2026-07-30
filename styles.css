@@ -618,4 +618,4 @@ body.theme-light .ov { background:#00000055; }
 }
 
 /* Nav item unread badges */
-.tab-badge { background:var(--accent); color:#fff; font-size:10px; font-weight:700; border-radius:9px; padding:1px 6px; min-width:18px; text-align:center; font-family:inherit; }
+.tab-badge { background:var(--red); color:#fff; font-size:10px; font-weight:700; border-radius:9px; padding:1px 6px; min-width:18px; text-align:center; font-family:inherit; }

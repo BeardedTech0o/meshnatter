@@ -2,7 +2,7 @@ const ONLINE_MS = 30 * 60 * 1000;
 
 const S = {
   ws:null, connected:false, myNodeNum:null,
-  nodes:{}, channels:{}, conversations:{}, activeTab:null, unread:{},
+  nodes:{}, channels:{}, conversations:{}, activeDM:null, activeChannel:null, unread:{},
   msgIndex:{},
   filter:'all', startTime:null, selectedNode:null,
   uptimeTimer:null, wsTimer:null,
@@ -83,8 +83,8 @@ function handle(msg) {
       S.everConnected=true;
       try { localStorage.setItem('mn_ever_connected','1'); localStorage.setItem('mn_last_ip', msg.ip||''); } catch {}
       setConnUI(true, msg.ip);
-      { const sb=document.getElementById('sendBtn'); if(sb) sb.disabled=false; }
-      { const ci=document.getElementById('compInp'); if(ci) ci.disabled=false; }
+      ['sendBtn','sendBtn2'].forEach(id=>{ const b=document.getElementById(id); if(b) b.disabled=false; });
+      ['compInp','compInp2'].forEach(id=>{ const i=document.getElementById(id); if(i) i.disabled=false; });
       startUptime();
       hideFirstRun();
       updateIdentity();
@@ -100,8 +100,8 @@ function handle(msg) {
     case 'disconnected': case 'connectError':
       S.connected=false;
       setConnUI(false, msg.type==='connectError' ? msg.error : 'Disconnected');
-      { const sb=document.getElementById('sendBtn'); if(sb) sb.disabled=true; }
-      { const ci=document.getElementById('compInp'); if(ci) ci.disabled=true; }
+      ['sendBtn','sendBtn2'].forEach(id=>{ const b=document.getElementById(id); if(b) b.disabled=true; });
+      ['compInp','compInp2'].forEach(id=>{ const i=document.getElementById(id); if(i) i.disabled=true; });
       clearInterval(S.uptimeTimer);
       { const ut=document.getElementById('uptimeText'); if(ut) ut.textContent=''; }
       if(msg.type==='connectError') toast(msg.error,'err');
@@ -188,7 +188,8 @@ function handle(msg) {
         rxRssi:msg.rxRssi, rxSnr:msg.rxSnr,
         hops:(msg.hopStart!=null&&msg.hopLimit!=null)?msg.hopStart-msg.hopLimit:null
       });
-      if(document.hidden||S.activeTab!==tabId){
+      const activeId=isDM?S.activeDM:S.activeChannel;
+      if(document.hidden||activeId!==tabId){
         try{ new Notification(S.nodes[msg.fromNum]?.name||'Mesh',{body:msg.text}); }catch{}
       }
       break;
@@ -239,7 +240,8 @@ function handle(msg) {
             m.ackTs = new Date();
             toast(m.statusLabel,'err');
           }
-          if(S.activeTab===ref.tabId) renderMessages();
+          if(ref.tabId.startsWith('ch:')){ if(S.activeChannel===ref.tabId) renderChannelThread(); }
+          else { if(S.activeDM===ref.tabId) renderDMThread(); }
         }
       }
       break;
@@ -283,10 +285,13 @@ function setFilter(f){
 }
 
 // ── CONVERSATIONS ─────────────────────────────────────────────────
+// Messages (DMs) and Channels are two independent panels — each remembers
+// its own open conversation (S.activeDM / S.activeChannel) so switching
+// between them, or to another page entirely, never loses your place.
 function ensureChTab(ch){
   const id='ch:'+ch.index;
   if(!S.conversations[id]){S.conversations[id]=[];S.unread[id]=0;}
-  if(!S.activeTab) setActiveTab(id);
+  if(!S.activeChannel) setActiveTab(id);
 }
 function ensureDMTab(num){
   const id='dm:'+num;
@@ -298,20 +303,21 @@ function pushConv(tabId,m){
   const idx=S.conversations[tabId].length;
   S.conversations[tabId].push(m);
   if(S.conversations[tabId].length>500) S.conversations[tabId].shift();
-  if(S.activeTab!==tabId) {
+
+  const isCh=tabId.startsWith('ch:');
+  const activeId=isCh?S.activeChannel:S.activeDM;
+  if(activeId!==tabId){
     S.unread[tabId]=(S.unread[tabId]||0)+1;
-    // Bump right panel badge
-    if(!m.sys) bumpMessageBadge();
+    if(!m.sys) isCh ? bumpChannelBadge() : bumpMessageBadge();
   }
-  renderChatList();
-  if(S.activeTab===tabId) renderMessages();
-  // Refresh channels tab if open
-  if(S.page==='channels') renderChannelsList();
+  if(isCh){ renderChannelsList(); if(activeId===tabId) renderChannelThread(); }
+  else    { renderChatList();     if(activeId===tabId) renderDMThread(); }
   return idx;
 }
 function setActiveTab(id){
-  S.activeTab=id; S.unread[id]=0;
-  renderChatList(); renderMessages(); updateHeader();
+  S.unread[id]=0;
+  if(id.startsWith('ch:')){ S.activeChannel=id; renderChannelsList(); renderChannelThread(); }
+  else { S.activeDM=id; renderChatList(); renderDMThread(); }
 }
 function openDMWith(num){
   ensureDMTab(num); renderChatList(); setActiveTab('dm:'+num);
@@ -323,43 +329,18 @@ function sysMsg(text){
   const id=keys.length?keys[0]:'ch:0';
   if(!S.conversations[id]) S.conversations[id]=[];
   S.conversations[id].push({sys:true,text,ts:new Date()});
-  if(S.activeTab===id) renderMessages();
+  if(id.startsWith('ch:')){ if(S.activeChannel===id) renderChannelThread(); }
+  else { if(S.activeDM===id) renderDMThread(); }
 }
 
-// ── CONVERSATION LIST (channels + open direct messages) ───────────
+// ── CONVERSATION LIST (direct messages only) ────────────────────────
 function renderChatList(){
   const el=document.getElementById('chatList');
   if(!el) return;
   let html='';
 
-  // Channels
-  const chans=Object.values(S.channels).sort((a,b)=>a.index-b.index);
-  if(chans.length){
-    html+='<div class="list-hdr">Channels <span class="list-hdr-count">'+chans.length+'</span></div>';
-    chans.forEach(ch=>{
-      const id='ch:'+ch.index;
-      const msgs=(S.conversations[id]||[]).filter(m=>!m.sys);
-      const last=msgs[msgs.length-1];
-      const unread=S.unread[id]||0;
-      const active=S.activeTab===id;
-      const preview=last?(last.mine?'You: '+esc(last.text):esc(last.fromName||'?')+': '+esc(last.text)):'No messages yet';
-      const tstr=last?timeStr(last.ts):'';
-      html+=`<div class="chat-row${active?' active':''}" onclick="setActiveTab('${id}')">
-        <div class="avatar ch-av"><span class="icon sm">campaign</span></div>
-        <div class="row-info">
-          <div class="row-name">${esc(ch.name)}<span style="font-size:10px;color:var(--label-3);font-weight:400">${ch.role==='PRIMARY'?'Primary':''}</span></div>
-          <div class="row-preview">${last&&last.mine?tickPreview(last.status):''}${preview}</div>
-        </div>
-        <div class="row-meta">
-          <span class="row-time">${tstr}</span>
-          ${unread?`<span class="unread-badge">${unread}</span>`:''}
-        </div>
-      </div>`;
-    });
-  }
-
-  // Direct messages — only conversations that actually exist (the full node
-  // roster now lives on the Peers page)
+  // Direct messages only — channels live on their own Channels page now.
+  // Only conversations that actually exist (the full node roster lives on Peers).
   let dms=Object.keys(S.conversations)
     .filter(k=>k.startsWith('dm:'))
     .map(k=>({ id:k, num:parseInt(k.slice(3)), node:S.nodes[parseInt(k.slice(3))]||null }));
@@ -371,7 +352,6 @@ function renderChatList(){
   });
 
   if(dms.length){
-    html+=`<div class="list-hdr">Direct messages <span class="list-hdr-count">${dms.length}</span></div>`;
     dms.forEach(d=>{
       const n=d.node||{num:d.num,name:numToId(d.num),shortName:'???'};
       const isMe=n.num===S.myNodeNum;
@@ -379,7 +359,7 @@ function renderChatList(){
       const msgs=(S.conversations[d.id]||[]).filter(m=>!m.sys);
       const last=msgs[msgs.length-1];
       const unread=S.unread[d.id]||0;
-      const active=S.activeTab===d.id;
+      const active=S.activeDM===d.id;
       const sc=sigColor(n.rssi);
       const preview=last?(last.mine?'You: '+esc(last.text):esc(last.text))
         :(n.lastHeard?'Last heard '+timeAgo(n.lastHeard):'No messages yet');
@@ -404,8 +384,8 @@ function renderChatList(){
   if(!html){
     html=`<div class="list-empty">
       <span class="icon xl">forum</span>
-      <div class="list-empty-title">No conversations yet</div>
-      <div class="list-empty-sub">${S.connected?'Channels appear once your node finishes loading. Open Peers to start a direct message.':'Connect to your node to load channels and peers.'}</div>
+      <div class="list-empty-title">No direct messages yet</div>
+      <div class="list-empty-sub">${S.connected?'Open Peers to start a direct message.':'Connect to your node, then open Peers to start a direct message.'}</div>
     </div>`;
   }
 
@@ -499,54 +479,74 @@ function tickPreview(status){
 }
 
 // ── CHAT HEADER ───────────────────────────────────────────────────
-function updateHeader(){
+// Messages (DMs) and Channels each have their own header/feed/composer DOM,
+// so each gets its own render pair — but both build bubbles the same way.
+function renderDMHeader(){
   const nameEl=document.getElementById('chName');
   const subEl=document.getElementById('chSub');
   const aviEl=document.getElementById('chAvi');
   const destLabel=document.getElementById('composeDestLabel');
+  const id=S.activeDM;
 
-  if(!S.activeTab){
+  if(!id){
     nameEl.textContent='Select a conversation';
-    subEl.textContent='Pick a channel or peer on the left';
+    subEl.textContent='Pick a peer on the left';
     destLabel.textContent='No conversation selected';
+    aviEl.innerHTML='<span class="icon" style="color:var(--label-3)">forum</span>';
     return;
   }
-  if(S.activeTab.startsWith('ch:')){
-    const idx=parseInt(S.activeTab.slice(3));
-    const ch=S.channels[idx];
-    nameEl.textContent=ch?ch.name:'Channel '+idx;
-    aviEl.innerHTML='<span class="icon" style="color:var(--blue)">campaign</span>';
-    destLabel.textContent=(ch?ch.name:'Channel '+idx)+' — all nodes';
-    const nodeCount=Object.keys(S.nodes).length;
-    subEl.textContent=(ch?.role==='PRIMARY'?'Primary channel':'Secondary channel')+' · broadcast to '+nodeCount+' known node'+(nodeCount!==1?'s':'');
-  } else {
-    const num=parseInt(S.activeTab.slice(3));
-    const n=S.nodes[num];
-    nameEl.textContent=n?n.name:numToId(num);
-    aviEl.innerHTML='<span class="icon" style="color:var(--label-3)">person</span>';
-    destLabel.textContent=(n?n.name:numToId(num))+' — direct message';
-    const online=n&&isOnline(n);
-    subEl.textContent=n?(online?'Online now':'Last seen '+(n.lastHeard?timeAgo(n.lastHeard):'unknown')):numToId(num);
+  const num=parseInt(id.slice(3));
+  const n=S.nodes[num];
+  nameEl.textContent=n?n.name:numToId(num);
+  aviEl.innerHTML='<span class="icon" style="color:var(--label-3)">person</span>';
+  destLabel.textContent=(n?n.name:numToId(num))+' — direct message';
+  const online=n&&isOnline(n);
+  subEl.textContent=n?(online?'Online now':'Last seen '+(n.lastHeard?timeAgo(n.lastHeard):'unknown')):numToId(num);
+}
+function renderChannelHeader(){
+  const nameEl=document.getElementById('chName2');
+  const subEl=document.getElementById('chSub2');
+  const aviEl=document.getElementById('chAvi2');
+  const destLabel=document.getElementById('composeDestLabel2');
+  const id=S.activeChannel;
+
+  if(!id){
+    nameEl.textContent='Select a channel';
+    subEl.textContent='Pick a channel on the left';
+    destLabel.textContent='No channel selected';
+    aviEl.innerHTML='<span class="icon" style="color:var(--label-3)">hub</span>';
+    return;
   }
+  const idx=parseInt(id.slice(3));
+  const ch=S.channels[idx];
+  nameEl.textContent=ch?ch.name:'Channel '+idx;
+  aviEl.innerHTML='<span class="icon" style="color:var(--accent)">campaign</span>';
+  destLabel.textContent=(ch?ch.name:'Channel '+idx)+' — all nodes';
+  const nodeCount=Object.keys(S.nodes).length;
+  subEl.textContent=(ch?.role==='PRIMARY'?'Primary channel':'Secondary channel')+' · broadcast to '+nodeCount+' known node'+(nodeCount!==1?'s':'');
 }
 
 // ── MESSAGES ──────────────────────────────────────────────────────
-function renderMessages(){
-  const feed=document.getElementById('msgFeed');
-  const msgs=S.activeTab?(S.conversations[S.activeTab]||[]):[];
+function renderDMThread(){
+  renderDMHeader();
+  const id=S.activeDM;
+  let title='Meshnatter', sub='Connect to get started';
+  if(id){ const num=parseInt(id.slice(3)); title=S.nodes[num]?.name||numToId(num); sub='No messages — say something!'; }
+  renderThreadInto('msgFeed', id, title, sub);
+}
+function renderChannelThread(){
+  renderChannelHeader();
+  const id=S.activeChannel;
+  let title='Meshnatter', sub='Select a channel on the left to see its broadcasts';
+  if(id){ const idx=parseInt(id.slice(3)); title=S.channels[idx]?.name||'Channel'; sub='No messages yet'; }
+  renderThreadInto('msgFeed2', id, title, sub);
+}
+function renderThreadInto(feedId, tabId, emptyTitle, emptySub){
+  const feed=document.getElementById(feedId);
+  const msgs=tabId?(S.conversations[tabId]||[]):[];
 
   if(!msgs.length){
-    let title='', sub='';
-    if(S.activeTab?.startsWith('ch:')){
-      const idx=parseInt(S.activeTab.slice(3));
-      title=S.channels[idx]?.name||'Channel'; sub='No messages yet';
-    } else if(S.activeTab?.startsWith('dm:')){
-      const num=parseInt(S.activeTab.slice(3));
-      title=S.nodes[num]?.name||numToId(num); sub='No messages — say something!';
-    } else {
-      title='Meshnatter'; sub='Connect to get started';
-    }
-    feed.innerHTML=`<div class="msg-empty"><span class="icon xl">forum</span><div class="msg-empty-title">${esc(title)}</div><div class="msg-empty-sub">${esc(sub)}</div></div>`;
+    feed.innerHTML=`<div class="msg-empty"><span class="icon xl">forum</span><div class="msg-empty-title">${esc(emptyTitle)}</div><div class="msg-empty-sub">${esc(emptySub)}</div></div>`;
     return;
   }
 
@@ -582,7 +582,7 @@ function renderMessages(){
         maxretransmit:`<span class="icon sm">error_outline</span> Max Retransmission Reached`,
         nack:         `<span class="icon sm">error_outline</span> `+(m.statusLabel||m.statusError||'Failed'),
       };
-      statusLine=`<div class="msg-status-line ${st}" onclick="showMessageDetails('${S.activeTab}',${msgs.indexOf(m)})" title="Message details">${labels[st]||''}</div>`;
+      statusLine=`<div class="msg-status-line ${st}" onclick="showMessageDetails('${tabId}',${msgs.indexOf(m)})" title="Message details">${labels[st]||''}</div>`;
     }
 
     // Incoming signal info
@@ -640,13 +640,15 @@ function showMessageDetails(tabId, idx){
   document.getElementById('mdOv').classList.add('show');
 }
 
-function sendMsg(){
-  const inp=document.getElementById('compInp');
+function sendMsg(kind){
+  const isCh=kind==='ch';
+  const activeId=isCh?S.activeChannel:S.activeDM;
+  const inp=document.getElementById(isCh?'compInp2':'compInp');
   const text=inp.value.trim();
-  if(!text||!S.connected||!S.activeTab) return;
+  if(!text||!S.connected||!activeId) return;
   let destinationNum=null, channelIndex=0;
-  if(S.activeTab.startsWith('ch:')) channelIndex=parseInt(S.activeTab.slice(3));
-  else destinationNum=parseInt(S.activeTab.slice(3));
+  if(isCh) channelIndex=parseInt(activeId.slice(3));
+  else destinationNum=parseInt(activeId.slice(3));
   wsSend({type:'sendMessage',text,destinationNum,channelIndex});
   inp.value=''; inp.focus();
 }
@@ -783,18 +785,18 @@ function toggleConn(){
     wsSend({type:'disconnect'});
     S.connected=false; S.myNodeNum=null;
     S.nodes={}; S.channels={}; S.conversations={}; S.unread={};
-    S.activeTab=null; S.msgIndex={};
+    S.activeDM=null; S.activeChannel=null; S.msgIndex={};
     Object.values(markers).forEach(m=>map.removeLayer(m));
     for(const k in markers) delete markers[k];
     setConnUI(false,'Disconnected');
-    document.getElementById('sendBtn').disabled=true;
-    document.getElementById('compInp').disabled=true;
+    ['sendBtn','sendBtn2'].forEach(id=>{ document.getElementById(id).disabled=true; });
+    ['compInp','compInp2'].forEach(id=>{ document.getElementById(id).disabled=true; });
     clearInterval(S.uptimeTimer);
     document.getElementById('uptimeText').textContent='';
     S.deviceConfig=null; S.configDirty=false;
-    renderChatList(); renderStats(); renderMap(); renderMessages(); renderPeers();
+    renderChatList(); renderStats(); renderMap(); renderDMThread(); renderChannelThread(); renderPeers();
     renderChannelsList(); closeNodeDetail();
-    updateHeader(); updateIdentity();
+    updateIdentity();
     if(S.page==='config') renderConfigPage();
   } else {
     const ip=document.getElementById('nodeIp').value.trim();
@@ -1308,7 +1310,7 @@ function renderChannelsList() {
     const msgs = (S.conversations[tabId] || []).filter(m => !m.sys);
     const last = msgs[msgs.length - 1];
     const unread = S.unread[tabId] || 0;
-    const active = S.activeTab === tabId;
+    const active = S.activeChannel === tabId;
     const nodeCount = Object.values(S.nodes).length;
     const onlineCount = Object.values(S.nodes).filter(isOnline).length;
     const lastPreview = last
@@ -1334,8 +1336,7 @@ function renderChannelsList() {
 
 function openChannel(tabId) {
   setActiveTab(tabId);
-  navigate('messages');
-  const inp = document.getElementById('compInp');
+  const inp = document.getElementById('compInp2');
   if (inp) inp.focus();
 }
 
@@ -1382,11 +1383,11 @@ function init() {
   navigate(page);
 
   renderChatList();
-  renderMessages();
+  renderDMThread();
   renderPeers();
   renderChannelsList();
+  renderChannelThread();
   updateIdentity();
-  updateHeader();
 
   // Guided first-run connect card, or the compact reconnect control for returning users
   if (!S.everConnected) showFirstRun();

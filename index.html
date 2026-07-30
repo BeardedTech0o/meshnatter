@@ -111,7 +111,7 @@
         <span class="icon page-hdr-icon">chat</span>
         <div class="page-hdr-text">
           <h1 class="page-title">Messages</h1>
-          <p class="page-sub">Channel broadcasts and direct messages across your mesh</p>
+          <p class="page-sub">Direct messages with peers on your mesh</p>
         </div>
         <div class="stat-bar" id="statBar">
           <span class="stat-chip">Nodes <span class="v" id="scNodes">0</span></span>
@@ -152,9 +152,9 @@
             <div class="compose-row">
               <div class="compose-field">
                 <input class="compose-inp" id="compInp" placeholder="Message" disabled
-                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}">
+                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg('dm')}">
               </div>
-              <button class="btn-send" id="sendBtn" onclick="sendMsg()" disabled>
+              <button class="btn-send" id="sendBtn" onclick="sendMsg('dm')" disabled>
                 <span class="icon filled">send</span>
               </button>
             </div>
@@ -220,8 +220,38 @@
           <p class="page-sub">Channels configured on your node — open one to broadcast to the mesh</p>
         </div>
       </header>
-      <div class="page-body" id="tabPaneChannels">
-        <div class="channels-list" id="channelsList"></div>
+      <div class="page-body split" id="tabPaneChannels">
+        <!-- Channel list -->
+        <div class="conv-col">
+          <div class="channels-list" id="channelsList"></div>
+        </div>
+
+        <!-- Thread -->
+        <div class="chat-panel" id="panelChannelChat">
+          <div class="chat-header">
+            <div class="ch-avi" id="chAvi2"><span class="icon" style="color:var(--label-3)">hub</span></div>
+            <div class="ch-info">
+              <div class="ch-name" id="chName2">Select a channel</div>
+              <div class="ch-sub" id="chSub2">Pick a channel on the left</div>
+            </div>
+          </div>
+          <div class="msg-feed" id="msgFeed2"></div>
+          <div class="compose">
+            <div class="compose-dest" id="composeDest2">
+              <span class="icon sm" style="color:var(--label-4)">send</span>
+              <strong id="composeDestLabel2">No channel selected</strong>
+            </div>
+            <div class="compose-row">
+              <div class="compose-field">
+                <input class="compose-inp" id="compInp2" placeholder="Message" disabled
+                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg('ch')}">
+              </div>
+              <button class="btn-send" id="sendBtn2" onclick="sendMsg('ch')" disabled>
+                <span class="icon filled">send</span>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
