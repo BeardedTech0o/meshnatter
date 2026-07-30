@@ -8,8 +8,8 @@ const S = {
   uptimeTimer:null, wsTimer:null,
   // UI shell state
   page:'messages', peerFilter:'all', everConnected:false, accent:'blue',
-  // Device config state
-  deviceConfig:null, configEnums:null, configTab:'device', configDirty:false,
+  // Config page state — one entry per config section (see CFG_SECTIONS)
+  configs:{}, configEnums:null, configTab:'device', configModuleTab:'mqtt', configDirty:{},
   logs:[],
 };
 
@@ -105,7 +105,7 @@ function handle(msg) {
       clearInterval(S.uptimeTimer);
       { const ut=document.getElementById('uptimeText'); if(ut) ut.textContent=''; }
       if(msg.type==='connectError') toast(msg.error,'err');
-      S.deviceConfig=null; S.configDirty=false;
+      S.configs={}; S.configDirty={};
       updateIdentity();
       if(S.page==='config') renderConfigPage();
       break;
@@ -257,16 +257,17 @@ function handle(msg) {
 
     case 'sendError': toast(msg.error,'err'); break;
 
-    case 'deviceConfig':
-      S.deviceConfig=msg.config;
+    case 'configSection':
+      S.configs[msg.section]=msg.config;
       if(msg.enums) S.configEnums=msg.enums;
-      S.configDirty=false;
+      delete S.configDirty[msg.section];
       if(S.page==='config') renderConfigPage();
       break;
 
     case 'configResult':
       if(msg.ok){
-        toast(msg.action==='write'?'Device config saved to node':'Config request sent','ok');
+        const label=(CFG_SECTIONS[msg.section]&&CFG_SECTIONS[msg.section].label)||'Config';
+        toast(msg.action==='write'?label+' config saved to node':'Config request sent','ok');
       } else {
         toast((msg.action==='write'?'Could not save config: ':'Could not read config: ')+(msg.error||'unknown error'),'err');
       }
@@ -793,7 +794,7 @@ function toggleConn(){
     ['compInp','compInp2'].forEach(id=>{ document.getElementById(id).disabled=true; });
     clearInterval(S.uptimeTimer);
     document.getElementById('uptimeText').textContent='';
-    S.deviceConfig=null; S.configDirty=false;
+    S.configs={}; S.configDirty={};
     renderChatList(); renderStats(); renderMap(); renderDMThread(); renderChannelThread(); renderPeers();
     renderChannelsList(); closeNodeDetail();
     updateIdentity();
@@ -1082,84 +1083,567 @@ function showLanguages() {
 // ══════════════════════════════════════════════════════════════════
 // CONFIG PAGE
 // ══════════════════════════════════════════════════════════════════
-const CFG_TAB_LABELS = {
-  device:'Device', position:'Position', power:'Power', network:'Network',
-  display:'Display', lora:'LoRa', bluetooth:'Bluetooth', module:'Module',
+// Every config section Meshnatter can read and write. `kind` says which
+// AdminMessage family it belongs to; the server registry in server/server.js
+// mirrors this list and is what actually validates writes.
+// Field types: bool | enum | number | float | text | password
+const CFG_SECTIONS = {
+  device: {
+    label:'Device', kind:'config',
+    cards:[
+      { title:'Role & rebroadcasting',
+        desc:'How this radio behaves on the mesh. Leave these alone unless you know you need to change them.',
+        fields:[
+          {key:'role', label:'Role', type:'enum', enum:'role',
+           help:'CLIENT is right for almost everyone. Router roles keep the radio awake to relay traffic.'},
+          {key:'rebroadcastMode', label:'Rebroadcast mode', type:'enum', enum:'rebroadcastMode',
+           help:'Which packets this node repeats for other nodes.'},
+          {key:'nodeInfoBroadcastSecs', label:'Node info interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'How often this node announces its name and hardware to the mesh.'},
+        ]},
+      { title:'Diagnostics',
+        desc:'Serial output and managed mode. Serial output is what a USB console reads.',
+        fields:[
+          {key:'serialEnabled', label:'Serial output enabled', type:'bool',
+           help:'Turn off to silence the USB serial console (saves a little power).'},
+          {key:'isManaged', label:'Managed mode', type:'bool',
+           help:'When on, the radio refuses config changes from apps — only an admin key may edit it.'},
+        ]},
+      { title:'Buttons, buzzer & LED',
+        desc:'GPIO pin assignments and input behaviour for this board. 0 means "use the firmware default".',
+        fields:[
+          {key:'buttonGpio', label:'Button pin', type:'number', min:0, max:63,
+           help:'GPIO the user button is wired to. 0 = board default.'},
+          {key:'buzzerGpio', label:'Buzzer pin', type:'number', min:0, max:63,
+           help:'GPIO the buzzer is wired to. 0 = board default.'},
+          {key:'buzzerMode', label:'Buzzer mode', type:'enum', enum:'buzzerMode',
+           help:'What the buzzer is allowed to sound for.'},
+          {key:'doubleTapAsButtonPress', label:'Double tap as button press', type:'bool',
+           help:'Use the accelerometer double-tap as a button press (boards with an IMU only).'},
+          {key:'disableTripleClick', label:'Disable triple click', type:'bool',
+           help:'Stops a triple click from toggling the GPS.'},
+          {key:'ledHeartbeatDisabled', label:'Disable LED heartbeat', type:'bool',
+           help:'Stops the status LED blinking continuously.'},
+        ]},
+      { title:'Time zone',
+        desc:'POSIX TZ string used for on-screen clocks, e.g. GMT0BST,M3.5.0/1,M10.5.0 for the UK.',
+        fields:[
+          {key:'tzdef', label:'Timezone (TZ string)', type:'text', maxlength:64,
+           help:'Leave blank to use UTC.'},
+        ]},
+    ],
+  },
+
+  position: {
+    label:'Position', kind:'config',
+    cards:[
+      { title:'GPS',
+        desc:'Whether this radio has a GPS and how hard it works to keep a fix.',
+        fields:[
+          {key:'gpsMode', label:'GPS mode', type:'enum', enum:'gpsMode',
+           help:'ENABLED uses the GPS, DISABLED turns it off, NOT_PRESENT means the board has no GPS at all.'},
+          {key:'gpsUpdateInterval', label:'GPS update interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'How often the GPS wakes up to get a new fix. 0 = firmware default (about 2 minutes).'},
+          {key:'fixedPosition', label:'Fixed position', type:'bool',
+           help:'Treat the last known position as permanent — for a radio that never moves.'},
+        ]},
+      { title:'Broadcast',
+        desc:'How often your position goes out over the mesh. Smart broadcast only transmits when you have actually moved.',
+        fields:[
+          {key:'positionBroadcastSecs', label:'Broadcast interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'How often to send your position to the mesh. 0 = firmware default (15 minutes).'},
+          {key:'positionBroadcastSmartEnabled', label:'Smart broadcast', type:'bool',
+           help:'Only broadcast when you have moved far enough, instead of on a fixed timer.'},
+          {key:'broadcastSmartMinimumDistance', label:'Smart minimum distance', type:'number', unit:'metres', min:0, max:100000,
+           help:'How far you must move before a smart broadcast is sent. 0 = firmware default (100 m).'},
+          {key:'broadcastSmartMinimumIntervalSecs', label:'Smart minimum interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'Never send smart broadcasts closer together than this. 0 = firmware default (30 s).'},
+          {key:'positionFlags', label:'Position flags', type:'number', min:0, max:4294967295,
+           help:'Bitmask of extras to include with each position (altitude, satellite count, DOP…). Advanced.'},
+        ]},
+      { title:'GPS pins',
+        desc:'GPIO wiring for the GPS module. 0 means "use the board default" — only change these on custom hardware.',
+        fields:[
+          {key:'rxGpio', label:'GPS RX pin', type:'number', min:0, max:63, help:'GPIO the GPS transmit line is wired to.'},
+          {key:'txGpio', label:'GPS TX pin', type:'number', min:0, max:63, help:'GPIO the GPS receive line is wired to.'},
+          {key:'gpsEnGpio', label:'GPS enable pin', type:'number', min:0, max:63, help:'GPIO that powers the GPS on and off.'},
+        ]},
+    ],
+  },
+
+  power: {
+    label:'Power', kind:'config',
+    cards:[
+      { title:'Sleep & power saving',
+        desc:'Battery-powered radios can sleep between transmissions. On a mains-powered node you normally leave all of this off.',
+        fields:[
+          {key:'isPowerSaving', label:'Power saving mode', type:'bool',
+           help:'Let the radio sleep aggressively between packets. Slows response but saves a lot of battery.'},
+          {key:'lsSecs', label:'Light sleep interval', type:'number', unit:'seconds', min:0, max:4294967295,
+           help:'How long to stay in light sleep before waking to check the mesh. 0 = firmware default (5 minutes).'},
+          {key:'sdsSecs', label:'Deep sleep interval', type:'number', unit:'seconds', min:0, max:4294967295,
+           help:'How long to stay in deep sleep. Very large values effectively disable deep sleep.'},
+          {key:'minWakeSecs', label:'Minimum wake time', type:'number', unit:'seconds', min:0, max:86400,
+           help:'How long to stay awake after waking. 0 = firmware default (10 s).'},
+          {key:'waitBluetoothSecs', label:'Bluetooth wait time', type:'number', unit:'seconds', min:0, max:86400,
+           help:'How long to wait for a phone to connect over Bluetooth before sleeping. 0 = firmware default.'},
+          {key:'onBatteryShutdownAfterSecs', label:'Shutdown after (on battery)', type:'number', unit:'seconds', min:0, max:31536000,
+           help:'Power the radio off completely this long after losing external power. 0 = never shut down.'},
+        ]},
+      { title:'Battery measurement',
+        desc:'Only touch these if your board reports the wrong battery voltage.',
+        fields:[
+          {key:'adcMultiplierOverride', label:'ADC multiplier override', type:'float', min:0, max:10, step:0.01,
+           help:'Correction factor for the battery voltage reading. 0 = use the board default.'},
+          {key:'deviceBatteryInaAddress', label:'INA sensor I²C address', type:'number', min:0, max:127,
+           help:'I²C address of an external INA battery monitor. 0 = none fitted.'},
+        ]},
+    ],
+  },
+
+  network: {
+    label:'Network', kind:'config',
+    cards:[
+      { title:'Wi-Fi',
+        desc:'The radio joins your Wi-Fi as a client. This is how Meshnatter talks to it — changing it will drop the connection until the node rejoins.',
+        fields:[
+          {key:'wifiEnabled', label:'Wi-Fi enabled', type:'bool',
+           help:'Turn the Wi-Fi radio on. Wi-Fi and Bluetooth cannot both be used on ESP32 boards.'},
+          {key:'wifiSsid', label:'Network name (SSID)', type:'text', maxlength:32, help:'The Wi-Fi network to join.'},
+          {key:'wifiPsk', label:'Password', type:'password', maxlength:64,
+           help:'Wi-Fi password. The radio never sends this back, so it may look blank after a re-read.'},
+        ]},
+      { title:'Ethernet & addressing',
+        desc:'For boards with a wired Ethernet port, plus how an IP address is obtained.',
+        fields:[
+          {key:'ethEnabled', label:'Ethernet enabled', type:'bool', help:'Use the wired network port, if this board has one.'},
+          {key:'addressMode', label:'Address mode', type:'enum', enum:'addressMode',
+           help:'DHCP asks your router for an address. STATIC uses a fixed address set elsewhere.'},
+          {key:'ipv6Enabled', label:'IPv6 enabled', type:'bool', help:'Also request an IPv6 address.'},
+        ]},
+      { title:'NTP & logging',
+        desc:'Where the radio gets the time from, and where it can send its logs.',
+        fields:[
+          {key:'ntpServer', label:'NTP server', type:'text', maxlength:32,
+           help:'Time server to sync the clock against. Blank = firmware default (meshtastic.pool.ntp.org).'},
+          {key:'rsyslogServer', label:'Syslog server', type:'text', maxlength:32,
+           help:'Optional remote syslog host for debug logs. Leave blank if you do not run one.'},
+          {key:'enabledProtocols', label:'Enabled protocols', type:'number', min:0, max:4294967295,
+           help:'Bitmask of extra IP protocols (e.g. UDP mesh over the local network). 1 enables UDP broadcast.'},
+        ]},
+    ],
+  },
+
+  display: {
+    label:'Display', kind:'config',
+    cards:[
+      { title:'Screen',
+        desc:'Behaviour of the little OLED screen on the front of the radio.',
+        fields:[
+          {key:'screenOnSecs', label:'Screen timeout', type:'number', unit:'seconds', min:0, max:604800,
+           help:'How long the screen stays lit after a button press. 0 = firmware default (60 s).'},
+          {key:'autoScreenCarouselSecs', label:'Auto page interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'Cycle through the screen pages this often. 0 = do not cycle.'},
+          {key:'wakeOnTapOrMotion', label:'Wake on tap or motion', type:'bool',
+           help:'Light the screen when the radio is picked up (boards with an accelerometer only).'},
+          {key:'flipScreen', label:'Flip screen', type:'bool', help:'Rotate the display 180° for upside-down mounting.'},
+          {key:'oled', label:'OLED type', type:'enum', enum:'oledType',
+           help:'Which display controller is fitted. AUTO detects it and is almost always right.'},
+          {key:'displaymode', label:'Display mode', type:'enum', enum:'displayMode',
+           help:'Colour scheme / layout used on screen.'},
+        ]},
+      { title:'Units & format',
+        desc:'How numbers, headings and coordinates are shown on screen.',
+        fields:[
+          {key:'units', label:'Units', type:'enum', enum:'displayUnits', help:'Metric or imperial for distances and speeds.'},
+          {key:'use12hClock', label:'12-hour clock', type:'bool', help:'Show times as am/pm instead of 24-hour.'},
+          {key:'gpsFormat', label:'Coordinate format', type:'enum', enum:'gpsFormat',
+           help:'How GPS coordinates are written on screen — decimal degrees, DMS, UTM, MGRS, Open Location Code or OS grid.'},
+          {key:'headingBold', label:'Bold headings', type:'bool', help:'Draw screen headings in a heavier font.'},
+          {key:'compassNorthTop', label:'Compass north at top', type:'bool',
+           help:'Keep north fixed at the top of the compass instead of rotating with your heading.'},
+          {key:'compassOrientation', label:'Compass orientation', type:'enum', enum:'compassOrientation',
+           help:'Rotate the compass to match how the board is physically mounted.'},
+        ]},
+    ],
+  },
+
+  lora: {
+    label:'LoRa', kind:'config',
+    cards:[
+      { title:'Region & modem',
+        desc:'The most important settings on the radio. Every node you want to talk to must match on region and modem preset.',
+        fields:[
+          {key:'region', label:'Region', type:'enum', enum:'region',
+           help:'Legal frequency band for where you are. UNSET means the radio will not transmit at all.'},
+          {key:'usePreset', label:'Use modem preset', type:'bool',
+           help:'On (recommended) uses a named preset. Off lets you set bandwidth, spread factor and coding rate by hand.'},
+          {key:'modemPreset', label:'Modem preset', type:'enum', enum:'modemPreset',
+           help:'Speed/range trade-off. LONG_FAST is the default and what most meshes use.'},
+          {key:'hopLimit', label:'Hop limit', type:'number', min:0, max:7,
+           help:'How many times a packet may be relayed. 3 is the default; higher values congest the mesh.'},
+        ]},
+      { title:'Radio',
+        desc:'Transmit power and frequency. Overrides here can put you outside your legal band — leave them at 0 unless you know the rules.',
+        fields:[
+          {key:'txEnabled', label:'Transmit enabled', type:'bool',
+           help:'Turn off to make the node listen-only. It will still receive but never transmit.'},
+          {key:'txPower', label:'TX power', type:'number', unit:'dBm', min:0, max:30,
+           help:'Transmit power. 0 = the maximum legal power for your region.'},
+          {key:'channelNum', label:'Frequency slot', type:'number', min:0, max:255,
+           help:'Which slot within the region band to use. 0 = derived from the primary channel name.'},
+          {key:'overrideFrequency', label:'Override frequency', type:'float', unit:'MHz', min:0, max:3000, step:0.001,
+           help:'Force an exact frequency instead of a slot. 0 = off.'},
+          {key:'frequencyOffset', label:'Frequency offset', type:'float', unit:'Hz', min:-100, max:100, step:0.1,
+           help:'Trim for a crystal that is slightly off. Almost always 0.'},
+          {key:'overrideDutyCycle', label:'Override duty cycle', type:'bool',
+           help:'Ignore the regional duty-cycle limit. Illegal in most of Europe — leave off.'},
+          {key:'sx126xRxBoostedGain', label:'Boosted RX gain', type:'bool',
+           help:'Slightly more receive sensitivity at slightly more idle current (SX126x boards).'},
+          {key:'paFanDisabled', label:'Disable PA fan', type:'bool', help:'Turn off the amplifier cooling fan, on boards that have one.'},
+        ]},
+      { title:'Manual modem settings',
+        desc:'Only used when "Use modem preset" is off. Getting these wrong stops you talking to anyone.',
+        fields:[
+          {key:'bandwidth', label:'Bandwidth', type:'number', unit:'kHz', min:0, max:1000, help:'Channel bandwidth in kHz, e.g. 250.'},
+          {key:'spreadFactor', label:'Spread factor', type:'number', min:0, max:12, help:'Higher is slower but reaches further. 7–12.'},
+          {key:'codingRate', label:'Coding rate', type:'number', min:0, max:8, help:'Forward error correction denominator, 5–8.'},
+        ]},
+      { title:'MQTT relaying',
+        desc:'How this node treats traffic that arrives from or is destined for an MQTT bridge.',
+        fields:[
+          {key:'ignoreMqtt', label:'Ignore MQTT traffic', type:'bool', help:'Do not rebroadcast packets that came in over MQTT.'},
+          {key:'configOkToMqtt', label:'OK to send to MQTT', type:'bool', help:'Allow this node’s packets to be uplinked to MQTT by others.'},
+        ]},
+    ],
+  },
+
+  bluetooth: {
+    label:'Bluetooth', kind:'config',
+    cards:[
+      { title:'Pairing',
+        desc:'How a phone pairs with this radio. On ESP32 boards Bluetooth and Wi-Fi cannot both be on — turning this on may drop Meshnatter’s connection.',
+        fields:[
+          {key:'enabled', label:'Bluetooth enabled', type:'bool', help:'Turn the Bluetooth radio on.'},
+          {key:'mode', label:'Pairing mode', type:'enum', enum:'pairingMode',
+           help:'RANDOM_PIN shows a new PIN on screen each time. FIXED_PIN always uses the PIN below. NO_PIN pairs with anyone.'},
+          {key:'fixedPin', label:'Fixed PIN', type:'number', min:0, max:999999, help:'Six-digit PIN used when pairing mode is FIXED_PIN.'},
+        ]},
+    ],
+  },
+
+  // ── Module config sections (shown under the Module tab) ────────────
+  mqtt: {
+    label:'MQTT', kind:'module',
+    cards:[
+      { title:'Broker',
+        desc:'Bridge this node’s mesh traffic to an MQTT broker over the internet.',
+        fields:[
+          {key:'enabled', label:'MQTT enabled', type:'bool', help:'Turn the MQTT bridge on.'},
+          {key:'address', label:'Broker address', type:'text', maxlength:63, help:'Host name or IP. Blank = the public Meshtastic broker.'},
+          {key:'username', label:'Username', type:'text', maxlength:63, help:'Broker username, if it needs one.'},
+          {key:'password', label:'Password', type:'password', maxlength:63, help:'Broker password, if it needs one.'},
+          {key:'root', label:'Root topic', type:'text', maxlength:32, help:'Topic prefix to publish under. Blank = msh.'},
+          {key:'tlsEnabled', label:'Use TLS', type:'bool', help:'Connect to the broker over TLS. Needs a broker that supports it.'},
+        ]},
+      { title:'What gets published',
+        desc:'Encryption and formatting of the messages sent to the broker.',
+        fields:[
+          {key:'encryptionEnabled', label:'Encrypted uplink', type:'bool', help:'Publish packets still encrypted with your channel key.'},
+          {key:'jsonEnabled', label:'Also publish JSON', type:'bool', help:'Publish a decoded JSON copy alongside the protobuf. Plaintext — be careful.'},
+          {key:'proxyToClientEnabled', label:'Proxy via phone/app', type:'bool',
+           help:'Send MQTT through the connected client’s internet instead of the node’s own Wi-Fi.'},
+          {key:'mapReportingEnabled', label:'Report to public map', type:'bool',
+           help:'Publish this node’s position to the public Meshtastic map.'},
+        ]},
+    ],
+  },
+
+  serial: {
+    label:'Serial', kind:'module',
+    cards:[
+      { title:'Serial bridge',
+        desc:'Send and receive mesh text over a hardware UART — for wiring the radio to another device.',
+        fields:[
+          {key:'enabled', label:'Serial module enabled', type:'bool', help:'Turn the serial module on.'},
+          {key:'mode', label:'Mode', type:'enum', enum:'serialMode',
+           help:'How bytes on the UART map to mesh packets. SIMPLE is a raw pipe, TEXTMSG sends them as messages.'},
+          {key:'baud', label:'Baud rate', type:'enum', enum:'serialBaud', help:'Serial speed. DEFAULT is 38400.'},
+          {key:'echo', label:'Echo', type:'bool', help:'Echo what this node transmits back out of the serial port.'},
+          {key:'timeout', label:'Timeout', type:'number', unit:'seconds', min:0, max:86400,
+           help:'How long to wait for more input before sending what it has. 0 = firmware default.'},
+        ]},
+      { title:'Pins',
+        desc:'Which GPIOs the UART uses. 0 means the board default.',
+        fields:[
+          {key:'rxd', label:'RX pin', type:'number', min:0, max:63, help:'GPIO for incoming serial data.'},
+          {key:'txd', label:'TX pin', type:'number', min:0, max:63, help:'GPIO for outgoing serial data.'},
+          {key:'overrideConsoleSerialPort', label:'Take over console port', type:'bool',
+           help:'Use the USB console UART for this module. You will lose the debug console.'},
+        ]},
+    ],
+  },
+
+  externalNotification: {
+    label:'Ext. notification', kind:'module',
+    cards:[
+      { title:'External notification',
+        desc:'Drive an LED, buzzer or vibration motor when a message arrives.',
+        fields:[
+          {key:'enabled', label:'Module enabled', type:'bool', help:'Turn external notifications on.'},
+          {key:'outputMs', label:'Output duration', type:'number', unit:'ms', min:0, max:600000,
+           help:'How long the output stays active per alert. 0 = firmware default (1000 ms).'},
+          {key:'nagTimeout', label:'Nag timeout', type:'number', unit:'seconds', min:0, max:86400,
+           help:'Keep re-alerting for this long until you press the button. 0 = alert once.'},
+          {key:'active', label:'Active high', type:'bool', help:'On means the output pin is driven high when alerting.'},
+          {key:'usePwm', label:'Use PWM', type:'bool', help:'Drive the output with PWM so a piezo plays a tone.'},
+          {key:'useI2sAsBuzzer', label:'Use I²S as buzzer', type:'bool', help:'Play alerts through an I²S amplifier instead of a GPIO.'},
+        ]},
+      { title:'Output pins',
+        desc:'GPIOs for each kind of output. 0 means unused.',
+        fields:[
+          {key:'output', label:'LED pin', type:'number', min:0, max:63, help:'GPIO for the general/LED output.'},
+          {key:'outputVibra', label:'Vibration pin', type:'number', min:0, max:63, help:'GPIO for a vibration motor.'},
+          {key:'outputBuzzer', label:'Buzzer pin', type:'number', min:0, max:63, help:'GPIO for a buzzer.'},
+        ]},
+      { title:'What triggers an alert',
+        desc:'A "bell" is a message containing the bell character, used to deliberately ring a node.',
+        fields:[
+          {key:'alertMessage', label:'Any message → LED', type:'bool', help:'Flash the LED output for every incoming message.'},
+          {key:'alertMessageVibra', label:'Any message → vibrate', type:'bool', help:'Vibrate for every incoming message.'},
+          {key:'alertMessageBuzzer', label:'Any message → buzzer', type:'bool', help:'Sound the buzzer for every incoming message.'},
+          {key:'alertBell', label:'Bell → LED', type:'bool', help:'Flash the LED only for bell messages.'},
+          {key:'alertBellVibra', label:'Bell → vibrate', type:'bool', help:'Vibrate only for bell messages.'},
+          {key:'alertBellBuzzer', label:'Bell → buzzer', type:'bool', help:'Sound the buzzer only for bell messages.'},
+        ]},
+    ],
+  },
+
+  storeForward: {
+    label:'Store & forward', kind:'module',
+    cards:[
+      { title:'Store & forward',
+        desc:'Keeps a history of messages so nodes that were asleep or out of range can catch up. Needs a board with PSRAM to be the server.',
+        fields:[
+          {key:'enabled', label:'Module enabled', type:'bool', help:'Turn store & forward on.'},
+          {key:'isServer', label:'Act as server', type:'bool', help:'This node stores the history for others. Requires PSRAM.'},
+          {key:'heartbeat', label:'Send heartbeat', type:'bool', help:'Periodically advertise that this server exists.'},
+          {key:'records', label:'Records to keep', type:'number', min:0, max:100000, help:'How many messages to store. 0 = as many as memory allows.'},
+          {key:'historyReturnMax', label:'Max records returned', type:'number', min:0, max:100000, help:'Most messages to send in one catch-up reply. 0 = firmware default.'},
+          {key:'historyReturnWindow', label:'History window', type:'number', unit:'seconds', min:0, max:604800, help:'How far back a catch-up reply may reach. 0 = firmware default.'},
+        ]},
+    ],
+  },
+
+  rangeTest: {
+    label:'Range test', kind:'module',
+    cards:[
+      { title:'Range test',
+        desc:'Transmits a numbered test message on a timer so you can drive around and see how far the mesh reaches. Leave this off in normal use — it is noisy.',
+        fields:[
+          {key:'enabled', label:'Module enabled', type:'bool', help:'Turn range testing on.'},
+          {key:'sender', label:'Send interval', type:'number', unit:'seconds', min:0, max:86400,
+           help:'How often to send a test packet. 0 = receive only, do not send.'},
+          {key:'save', label:'Save results to storage', type:'bool', help:'Write received test packets to a CSV on the node’s filesystem.'},
+        ]},
+    ],
+  },
+
+  telemetry: {
+    label:'Telemetry', kind:'module',
+    cards:[
+      { title:'Device telemetry',
+        desc:'Battery, voltage and channel-utilisation readings this node broadcasts about itself.',
+        fields:[
+          {key:'deviceUpdateInterval', label:'Device metrics interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'How often to broadcast battery and utilisation. 0 = firmware default (30 minutes).'},
+        ]},
+      { title:'Environment sensors',
+        desc:'For nodes with a temperature/humidity/pressure sensor attached.',
+        fields:[
+          {key:'environmentMeasurementEnabled', label:'Environment sensing', type:'bool', help:'Read the attached environment sensor.'},
+          {key:'environmentUpdateInterval', label:'Environment interval', type:'number', unit:'seconds', min:0, max:604800, help:'How often to broadcast sensor readings. 0 = firmware default.'},
+          {key:'environmentScreenEnabled', label:'Show on screen', type:'bool', help:'Add an environment page to the OLED carousel.'},
+          {key:'environmentDisplayFahrenheit', label:'Display in Fahrenheit', type:'bool', help:'Show temperatures in °F instead of °C.'},
+        ]},
+      { title:'Air quality, power & health',
+        desc:'Optional extra sensor packages. Each one only does anything if the matching hardware is fitted.',
+        fields:[
+          {key:'airQualityEnabled', label:'Air quality sensing', type:'bool', help:'Read an attached particulate sensor.'},
+          {key:'airQualityInterval', label:'Air quality interval', type:'number', unit:'seconds', min:0, max:604800, help:'How often to broadcast air quality. 0 = firmware default.'},
+          {key:'powerMeasurementEnabled', label:'Power sensing', type:'bool', help:'Read an attached INA current/voltage sensor.'},
+          {key:'powerUpdateInterval', label:'Power interval', type:'number', unit:'seconds', min:0, max:604800, help:'How often to broadcast power readings. 0 = firmware default.'},
+          {key:'powerScreenEnabled', label:'Show power on screen', type:'bool', help:'Add a power page to the OLED carousel.'},
+          {key:'healthMeasurementEnabled', label:'Health sensing', type:'bool', help:'Read an attached heart-rate / SpO₂ sensor.'},
+          {key:'healthUpdateInterval', label:'Health interval', type:'number', unit:'seconds', min:0, max:604800, help:'How often to broadcast health readings. 0 = firmware default.'},
+          {key:'healthScreenEnabled', label:'Show health on screen', type:'bool', help:'Add a health page to the OLED carousel.'},
+        ]},
+    ],
+  },
+
+  cannedMessage: {
+    label:'Canned messages', kind:'module',
+    cards:[
+      { title:'Canned messages',
+        desc:'Lets you pick a pre-written message on the device itself using a rotary encoder or up/down buttons. The message list is edited on the node.',
+        fields:[
+          {key:'enabled', label:'Module enabled', type:'bool', help:'Turn canned messages on.'},
+          {key:'sendBell', label:'Send bell character', type:'bool', help:'Append a bell to each canned message so the receiving node alerts.'},
+          {key:'rotary1Enabled', label:'Rotary encoder input', type:'bool', help:'Use a rotary encoder to scroll the list.'},
+          {key:'updown1Enabled', label:'Up/down button input', type:'bool', help:'Use up/down buttons to scroll the list.'},
+          {key:'allowInputSource', label:'Allowed input source', type:'text', maxlength:16,
+           help:'Which input device may drive this, e.g. rotEnc1, upDownEnc1, or _any.'},
+        ]},
+      { title:'Input wiring',
+        desc:'GPIOs and events for the encoder or buttons. 0 means unused.',
+        fields:[
+          {key:'inputbrokerPinA', label:'Input pin A', type:'number', min:0, max:63, help:'First encoder pin.'},
+          {key:'inputbrokerPinB', label:'Input pin B', type:'number', min:0, max:63, help:'Second encoder pin.'},
+          {key:'inputbrokerPinPress', label:'Press pin', type:'number', min:0, max:63, help:'Encoder push-button pin.'},
+          {key:'inputbrokerEventCw', label:'Clockwise event', type:'enum', enum:'inputEvent', help:'What turning clockwise counts as.'},
+          {key:'inputbrokerEventCcw', label:'Anticlockwise event', type:'enum', enum:'inputEvent', help:'What turning anticlockwise counts as.'},
+          {key:'inputbrokerEventPress', label:'Press event', type:'enum', enum:'inputEvent', help:'What pressing counts as.'},
+        ]},
+    ],
+  },
+
+  audio: {
+    label:'Audio', kind:'module',
+    cards:[
+      { title:'Codec2 voice',
+        desc:'Sends short compressed voice clips over LoRa. Needs an I²S microphone and amplifier wired up — most boards, including the Heltec V3, have none.',
+        fields:[
+          {key:'codec2Enabled', label:'Module enabled', type:'bool', help:'Turn Codec2 voice on.'},
+          {key:'bitrate', label:'Bitrate', type:'enum', enum:'audioBitrate',
+           help:'Codec2 rate. Lower bitrates sound worse but get through on slower modem presets.'},
+          {key:'pttPin', label:'Push-to-talk pin', type:'number', min:0, max:63, help:'GPIO for the push-to-talk button. 0 = unused.'},
+        ]},
+      { title:'I²S pins',
+        desc:'Wiring for the audio codec. 0 means unused.',
+        fields:[
+          {key:'i2sWs', label:'I²S word select (WS)', type:'number', min:0, max:63, help:'Word-select / LRCLK pin.'},
+          {key:'i2sSd', label:'I²S data out (SD)', type:'number', min:0, max:63, help:'Data line to the amplifier.'},
+          {key:'i2sDin', label:'I²S data in (DIN)', type:'number', min:0, max:63, help:'Data line from the microphone.'},
+          {key:'i2sSck', label:'I²S clock (SCK)', type:'number', min:0, max:63, help:'Bit clock pin.'},
+        ]},
+    ],
+  },
+
+  remoteHardware: {
+    label:'Remote hardware', kind:'module',
+    cards:[
+      { title:'Remote hardware',
+        desc:'Lets other nodes read and drive this node’s GPIO pins over the mesh. Anyone on your channel can use it, so leave it off unless you need it.',
+        fields:[
+          {key:'enabled', label:'Module enabled', type:'bool', help:'Allow remote GPIO access.'},
+          {key:'allowUndefinedPinAccess', label:'Allow any pin', type:'bool',
+           help:'Off restricts access to the pins listed on the node. On exposes every GPIO — risky.'},
+        ],
+        note:'The named pin list is not editable from Meshnatter — use the official Meshtastic client for that. Whatever the node already has is left untouched when you save here.'},
+    ],
+  },
+
+  neighborInfo: {
+    label:'Neighbor info', kind:'module',
+    cards:[
+      { title:'Neighbor info',
+        desc:'Broadcasts the list of nodes this radio hears directly, which is what builds a mesh topology map. It is chatty — most meshes ask you to leave it off.',
+        fields:[
+          {key:'enabled', label:'Module enabled', type:'bool', help:'Turn neighbour reporting on.'},
+          {key:'updateInterval', label:'Update interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'How often to broadcast the neighbour list. 0 = firmware default (6 hours). Minimum is 4 hours in most builds.'},
+          {key:'transmitOverLora', label:'Transmit over LoRa', type:'bool',
+           help:'Off keeps neighbour info local to the connected app instead of putting it on the air.'},
+        ]},
+    ],
+  },
+
+  ambientLighting: {
+    label:'Ambient lighting', kind:'module',
+    cards:[
+      { title:'Ambient lighting',
+        desc:'Controls an RGB LED fitted to the board. Values are 0–255.',
+        fields:[
+          {key:'ledState', label:'LED on', type:'bool', help:'Turn the ambient LED on.'},
+          {key:'current', label:'Current', type:'number', min:0, max:255, help:'Overall brightness / drive current.'},
+          {key:'red', label:'Red', type:'number', min:0, max:255, help:'Red channel level.'},
+          {key:'green', label:'Green', type:'number', min:0, max:255, help:'Green channel level.'},
+          {key:'blue', label:'Blue', type:'number', min:0, max:255, help:'Blue channel level.'},
+        ]},
+    ],
+  },
+
+  detectionSensor: {
+    label:'Detection sensor', kind:'module',
+    cards:[
+      { title:'Detection sensor',
+        desc:'Watches a GPIO and announces to the mesh when it changes — a door switch, PIR sensor, water alarm and so on.',
+        fields:[
+          {key:'enabled', label:'Module enabled', type:'bool', help:'Turn the detection sensor on.'},
+          {key:'name', label:'Sensor name', type:'text', maxlength:20, help:'Friendly name used in the broadcast message, e.g. "Front gate".'},
+          {key:'monitorPin', label:'Monitor pin', type:'number', min:0, max:63, help:'GPIO the sensor is wired to.'},
+          {key:'detectionTriggerType', label:'Trigger type', type:'enum', enum:'triggerType', help:'Which pin state or edge counts as a detection.'},
+          {key:'usePullup', label:'Use internal pull-up', type:'bool', help:'Enable the internal pull-up resistor on the monitored pin.'},
+          {key:'sendBell', label:'Send bell character', type:'bool', help:'Append a bell so receiving nodes alert audibly.'},
+        ]},
+      { title:'Rate limiting',
+        desc:'Stops a twitchy sensor from flooding the mesh.',
+        fields:[
+          {key:'minimumBroadcastSecs', label:'Minimum interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'Never send detections closer together than this. 0 = firmware default (45 s).'},
+          {key:'stateBroadcastSecs', label:'State broadcast interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'Also send the current state on this timer even with no change. 0 = off.'},
+        ]},
+    ],
+  },
+
+  paxcounter: {
+    label:'Paxcounter', kind:'module',
+    cards:[
+      { title:'Paxcounter',
+        desc:'Counts nearby phones by listening for Wi-Fi and Bluetooth probes, and broadcasts the tally. Check your local privacy rules before using it.',
+        fields:[
+          {key:'enabled', label:'Module enabled', type:'bool', help:'Turn the passenger counter on.'},
+          {key:'paxcounterUpdateInterval', label:'Update interval', type:'number', unit:'seconds', min:0, max:604800,
+           help:'How often to broadcast the count. 0 = firmware default.'},
+          {key:'wifiThreshold', label:'Wi-Fi RSSI threshold', type:'number', unit:'dBm', min:-128, max:0,
+           help:'Ignore Wi-Fi devices weaker than this. 0 = firmware default (-80).'},
+          {key:'bleThreshold', label:'Bluetooth RSSI threshold', type:'number', unit:'dBm', min:-128, max:0,
+           help:'Ignore Bluetooth devices weaker than this. 0 = firmware default (-80).'},
+        ]},
+    ],
+  },
 };
 
-// Device config field definitions — these map 1:1 onto the DeviceConfig
-// protobuf fields the server whitelists for writing.
-const DEVICE_SECTIONS = [
-  {
-    title:'Role & rebroadcasting',
-    desc:'How this radio behaves on the mesh. Leave these alone unless you know you need to change them.',
-    fields:[
-      {key:'role', label:'Role', type:'enum', enum:'role',
-       help:'CLIENT is right for almost everyone. Router roles keep the radio awake to relay traffic.'},
-      {key:'rebroadcastMode', label:'Rebroadcast mode', type:'enum', enum:'rebroadcastMode',
-       help:'Which packets this node repeats for other nodes.'},
-      {key:'nodeInfoBroadcastSecs', label:'Node info interval', type:'number', unit:'seconds', min:0, max:604800,
-       help:'How often this node announces its name and hardware to the mesh.'},
-    ],
-  },
-  {
-    title:'Diagnostics',
-    desc:'Serial output and managed mode. Serial output is what a USB console reads.',
-    fields:[
-      {key:'serialEnabled', label:'Serial output enabled', type:'bool',
-       help:'Turn off to silence the USB serial console (saves a little power).'},
-      {key:'isManaged', label:'Managed mode', type:'bool',
-       help:'When on, the radio refuses config changes from apps — only an admin key may edit it.'},
-    ],
-  },
-  {
-    title:'Buttons, buzzer & LED',
-    desc:'GPIO pin assignments and input behaviour for this board. 0 means "use the firmware default".',
-    fields:[
-      {key:'buttonGpio', label:'Button pin', type:'number', min:0, max:63,
-       help:'GPIO the user button is wired to. 0 = board default.'},
-      {key:'buzzerGpio', label:'Buzzer pin', type:'number', min:0, max:63,
-       help:'GPIO the buzzer is wired to. 0 = board default.'},
-      {key:'buzzerMode', label:'Buzzer mode', type:'enum', enum:'buzzerMode',
-       help:'What the buzzer is allowed to sound for.'},
-      {key:'doubleTapAsButtonPress', label:'Double tap as button press', type:'bool',
-       help:'Use the accelerometer double-tap as a button press (boards with an IMU only).'},
-      {key:'disableTripleClick', label:'Disable triple click', type:'bool',
-       help:'Stops a triple click from toggling the GPS.'},
-      {key:'ledHeartbeatDisabled', label:'Disable LED heartbeat', type:'bool',
-       help:'Stops the status LED blinking continuously.'},
-    ],
-  },
-  {
-    title:'Time zone',
-    desc:'POSIX TZ string used for on-screen clocks, e.g. GMT0BST,M3.5.0/1,M10.5.0 for the UK.',
-    fields:[
-      {key:'tzdef', label:'Timezone (TZ string)', type:'text', maxlength:64,
-       help:'Leave blank to use UTC.'},
-    ],
-  },
-];
-
-const COMING_SOON = {
-  position:'GPS mode, fixed position, broadcast intervals and position precision.',
-  power:'Sleep timers, power-saving mode and shutdown behaviour.',
-  network:'Wi-Fi credentials, Ethernet and NTP settings.',
-  display:'Screen timeout, orientation, units and OLED type.',
-  lora:'Region, modem preset, hop limit, TX power and frequency slot.',
-  bluetooth:'Pairing mode and fixed PIN.',
-  module:'MQTT, Serial, Store & Forward, Range Test and other module config.',
-};
+// Order of the sub-tabs shown under the Module tab
+const MODULE_TABS = ['mqtt','serial','externalNotification','storeForward','rangeTest','telemetry',
+  'cannedMessage','neighborInfo','detectionSensor','ambientLighting','paxcounter','remoteHardware','audio'];
 
 function setConfigTab(tab) {
   S.configTab = tab;
   document.querySelectorAll('.cfg-tab').forEach(b => b.classList.toggle('active', b.dataset.cfg === tab));
   renderConfigPage();
 }
+function setModuleTab(tab) {
+  S.configModuleTab = tab;
+  renderConfigPage();
+}
 
-function refreshDeviceConfig() {
+// Which section the page is actually showing right now
+function activeConfigSection() {
+  return S.configTab === 'module' ? S.configModuleTab : S.configTab;
+}
+
+function refreshConfigSection(section) {
   if (!S.connected) { toast('Connect to a node first', 'wrn'); return; }
-  wsSend({ type:'getDeviceConfig' });
+  wsSend({ type:'getConfig', section });
   toast('Reading config from node…', 'inf');
+}
+function saveConfigSection(section) {
+  if (!S.connected) { toast('Connect to a node first', 'wrn'); return; }
+  if (!S.configs[section]) { toast('No config loaded yet', 'wrn'); return; }
+  wsSend({ type:'setConfig', section, config: S.configs[section] });
+  toast('Writing config to node…', 'inf');
 }
 
 function enumOptionsFor(name) {
@@ -1172,88 +1656,82 @@ function prettyEnum(name) {
 function renderConfigPage() {
   const el = document.getElementById('cfgBody');
   if (!el) return;
-  const tab = S.configTab;
+  const section = activeConfigSection();
+  const def = CFG_SECTIONS[section];
+  const isModule = S.configTab === 'module';
+  const subTabs = isModule ? `<div class="cfg-subtabs">
+      ${MODULE_TABS.map(t => `<button class="cfg-subtab${t === section ? ' active' : ''}"
+        onclick="setModuleTab('${t}')">${esc(CFG_SECTIONS[t].label)}</button>`).join('')}
+    </div>` : '';
 
-  if (tab !== 'device') {
-    el.innerHTML = `<div class="cfg-wrap"><div class="card">
-      <div class="card-hd">
-        <div>
-          <h2 class="card-title">${CFG_TAB_LABELS[tab] || 'Config'} config</h2>
-          <p class="card-desc">${esc(COMING_SOON[tab] || '')}</p>
-        </div>
-        <span class="pill-soon">Coming soon</span>
-      </div>
-      <div class="card-body">
-        <p class="cfg-note">Meshnatter can already read and write Device config on the connected radio.
-        The remaining config sections are not wired up yet — use the official Meshtastic client for those
-        until they land here.</p>
-      </div>
-    </div></div>`;
-    return;
-  }
+  if (!def) { el.innerHTML = `<div class="cfg-wrap">${subTabs}</div>`; return; }
 
   if (!S.connected) {
-    el.innerHTML = `<div class="cfg-wrap"><div class="page-empty">
+    el.innerHTML = `<div class="cfg-wrap">${subTabs}<div class="page-empty">
       <span class="icon xl">settings_ethernet</span>
       <div class="page-empty-title">Not connected</div>
-      <div class="page-empty-sub">Connect to your node and Meshnatter will read its device config.</div>
+      <div class="page-empty-sub">Connect to your node and Meshnatter will read its ${esc(def.label.toLowerCase())} config.</div>
     </div></div>`;
     return;
   }
-  if (!S.deviceConfig) {
-    el.innerHTML = `<div class="cfg-wrap"><div class="page-empty">
+  const cfg = S.configs[section];
+  if (!cfg) {
+    el.innerHTML = `<div class="cfg-wrap">${subTabs}<div class="page-empty">
       <span class="icon xl">downloading</span>
-      <div class="page-empty-title">Reading device config…</div>
-      <div class="page-empty-sub">Meshnatter asked the radio for its device settings. This takes a few seconds
-        over Wi-Fi. <button class="link-btn" onclick="refreshDeviceConfig()">Ask again</button></div>
+      <div class="page-empty-title">Reading ${esc(def.label.toLowerCase())} config…</div>
+      <div class="page-empty-sub">Meshnatter asked the radio for these settings. This takes a few seconds
+        over Wi-Fi. <button class="link-btn" onclick="refreshConfigSection('${section}')">Ask again</button></div>
     </div></div>`;
     return;
   }
 
-  const cfg = S.deviceConfig;
+  const dirty = !!S.configDirty[section];
   el.innerHTML = `<div class="cfg-wrap">
-    ${DEVICE_SECTIONS.map(sec => `
+    ${subTabs}
+    ${def.cards.map(card => `
       <div class="card">
         <div class="card-hd">
           <div>
-            <h2 class="card-title">${esc(sec.title)}</h2>
-            <p class="card-desc">${esc(sec.desc)}</p>
+            <h2 class="card-title">${esc(card.title)}</h2>
+            <p class="card-desc">${esc(card.desc)}</p>
           </div>
         </div>
         <div class="card-body">
-          ${sec.fields.map(f => renderConfigField(f, cfg)).join('')}
+          ${card.fields.map(f => renderConfigField(section, f, cfg)).join('')}
+          ${card.note ? `<p class="cfg-note">${esc(card.note)}</p>` : ''}
         </div>
       </div>`).join('')}
     <div class="cfg-actions">
-      <span class="cfg-status" id="cfgStatus">${S.configDirty ? 'Unsaved changes' : 'In sync with the node'}</span>
-      <button class="btn-ghost" onclick="refreshDeviceConfig()"><span class="icon sm">refresh</span> Re-read</button>
-      <button class="btn-primary" onclick="saveDeviceConfig()"><span class="icon sm">save</span> Save to node</button>
+      <span class="cfg-status${dirty ? ' dirty' : ''}" id="cfgStatus">${dirty ? 'Unsaved changes' : 'In sync with the node'}</span>
+      <button class="btn-ghost" onclick="refreshConfigSection('${section}')"><span class="icon sm">refresh</span> Re-read</button>
+      <button class="btn-primary" onclick="saveConfigSection('${section}')"><span class="icon sm">save</span> Save to node</button>
     </div>
-    <p class="cfg-note">Saving writes the whole Device config block to the radio and commits it. The radio may
+    <p class="cfg-note">Saving writes the whole ${esc(def.label)} block to the radio and commits it. The radio may
       briefly restart its settings, then Meshnatter re-reads the values so you can confirm they stuck.</p>
   </div>`;
 }
 
-function renderConfigField(f, cfg) {
+function renderConfigField(section, f, cfg) {
   const val = cfg[f.key];
   let input = '';
   if (f.type === 'bool') {
     input = `<button class="toggle${val ? ' on' : ''}" role="switch" aria-checked="${!!val}"
-      onclick="onCfgToggle('${f.key}', this)"><span class="knob"></span></button>`;
+      onclick="onCfgToggle('${section}', '${f.key}', this)"><span class="knob"></span></button>`;
   } else if (f.type === 'enum') {
     const opts = enumOptionsFor(f.enum);
-    input = `<select class="cfg-select" onchange="onCfgChange('${f.key}', this.value, 'int')">
+    input = `<select class="cfg-select" onchange="onCfgChange('${section}', '${f.key}', this.value, 'int')">
       ${opts.length
         ? opts.map(o => `<option value="${o.value}"${Number(val) === o.value ? ' selected' : ''}>${esc(prettyEnum(o.name))}</option>`).join('')
         : `<option value="${esc(String(val))}">${esc(String(val))}</option>`}
     </select>`;
-  } else if (f.type === 'number') {
+  } else if (f.type === 'number' || f.type === 'float') {
+    const isFloat = f.type === 'float';
     input = `<input class="cfg-input num" type="number" value="${esc(String(val ?? 0))}"
-      min="${f.min ?? 0}" max="${f.max ?? 4294967295}"
-      onchange="onCfgChange('${f.key}', this.value, 'int')">${f.unit ? `<span class="cfg-unit">${esc(f.unit)}</span>` : ''}`;
+      min="${f.min ?? 0}" max="${f.max ?? 4294967295}"${isFloat ? ` step="${f.step ?? 0.01}"` : ''}
+      onchange="onCfgChange('${section}', '${f.key}', this.value, '${isFloat ? 'float' : 'int'}')">${f.unit ? `<span class="cfg-unit">${esc(f.unit)}</span>` : ''}`;
   } else {
-    input = `<input class="cfg-input" type="text" value="${esc(String(val ?? ''))}"
-      maxlength="${f.maxlength || 64}" onchange="onCfgChange('${f.key}', this.value, 'text')">`;
+    input = `<input class="cfg-input" type="${f.type === 'password' ? 'password' : 'text'}" value="${esc(String(val ?? ''))}"
+      maxlength="${f.maxlength || 64}" onchange="onCfgChange('${section}', '${f.key}', this.value, 'text')">`;
   }
   return `<div class="cfg-row">
     <div class="cfg-row-text">
@@ -1264,29 +1742,27 @@ function renderConfigField(f, cfg) {
   </div>`;
 }
 
-function markConfigDirty() {
-  S.configDirty = true;
+function markConfigDirty(section) {
+  S.configDirty[section] = true;
   const st = document.getElementById('cfgStatus');
   if (st) { st.textContent = 'Unsaved changes'; st.classList.add('dirty'); }
 }
-function onCfgChange(key, value, kind) {
-  if (!S.deviceConfig) return;
-  S.deviceConfig[key] = kind === 'int' ? Math.max(0, parseInt(value, 10) || 0) : String(value);
-  markConfigDirty();
+function onCfgChange(section, key, value, kind) {
+  const cfg = S.configs[section];
+  if (!cfg) return;
+  if (kind === 'int') cfg[key] = parseInt(value, 10) || 0;
+  else if (kind === 'float') cfg[key] = parseFloat(value) || 0;
+  else cfg[key] = String(value);
+  markConfigDirty(section);
 }
-function onCfgToggle(key, btn) {
-  if (!S.deviceConfig) return;
-  const next = !S.deviceConfig[key];
-  S.deviceConfig[key] = next;
+function onCfgToggle(section, key, btn) {
+  const cfg = S.configs[section];
+  if (!cfg) return;
+  const next = !cfg[key];
+  cfg[key] = next;
   btn.classList.toggle('on', next);
   btn.setAttribute('aria-checked', String(next));
-  markConfigDirty();
-}
-function saveDeviceConfig() {
-  if (!S.connected) { toast('Connect to a node first', 'wrn'); return; }
-  if (!S.deviceConfig) { toast('No config loaded yet', 'wrn'); return; }
-  wsSend({ type:'setDeviceConfig', config: S.deviceConfig });
-  toast('Writing config to node…', 'inf');
+  markConfigDirty(section);
 }
 
 function renderChannelsList() {

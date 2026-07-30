@@ -508,6 +508,11 @@ pre.jp .k{color:var(--teal)} pre.jp .s{color:var(--green)} pre.jp .n{color:var(-
 .cfg-tab:hover { color:var(--label-2); }
 .cfg-tab:focus-visible { color:var(--label); }
 .cfg-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+/* Module sub-tabs — one row of pills inside the Module tab */
+.cfg-subtabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:2px; }
+.cfg-subtab { padding:5px 11px; border:1px solid var(--separator); border-radius:999px; background:transparent; color:var(--label-3); font-family:inherit; font-size:11.5px; font-weight:600; cursor:pointer; transition:color .12s, border-color .12s, background .12s; outline:none; white-space:nowrap; }
+.cfg-subtab:hover { color:var(--label-2); border-color:var(--label-3); }
+.cfg-subtab.active { color:#fff; background:var(--accent); border-color:var(--accent); }
 .cfg-scroll { flex:1; overflow-y:auto; display:flex; }
 .cfg-scroll::-webkit-scrollbar { width:6px; }
 .cfg-scroll::-webkit-scrollbar-thumb { background:var(--separator); border-radius:3px; }
