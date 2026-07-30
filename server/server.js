@@ -282,9 +282,15 @@ async function sendText(text, destNum, channelIndex) {
   if (typeof text !== 'string' || text.length === 0 || text.length > 237) {
     throw new Error('Message must be 1-237 characters (Meshtastic limit)');
   }
-  const mp = create(MeshPacketSchema, { to: destNum ?? 0xFFFFFFFF, channel: channelIndex ?? 0, decoded: { payload: new TextEncoder().encode(text), portnum: PortNum.TEXT_MESSAGE_APP }, wantAck: true, hopLimit: 3 });
+  // The packet id must be assigned here, client-side — leaving it unset defaults
+  // to 0, so the node silently assigns its own real id on receipt. That real id
+  // is what comes back as `requestId` on the Routing ack, which then never
+  // matches the (always-0) id we told the UI to track, so ack status can never
+  // update no matter how many acks actually arrive.
+  const packetId = Math.floor(Math.random() * 0x7ffffffe) + 1;
+  const mp = create(MeshPacketSchema, { id: packetId, to: destNum ?? 0xFFFFFFFF, channel: channelIndex ?? 0, decoded: { payload: new TextEncoder().encode(text), portnum: PortNum.TEXT_MESSAGE_APP }, wantAck: true, hopLimit: 3 });
   await httpPut(`${nodeBaseUrl()}/api/v1/toradio`, toBinary(ToRadioSchema, create(ToRadioSchema, { payloadVariant: { case: 'packet', value: mp } })));
-  return Number(mp.id);
+  return packetId;
 }
 
 async function doConnect(ip, port) {
