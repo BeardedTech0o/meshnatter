@@ -1,6 +1,6 @@
 {
   "name": "meshnatter",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Meshnatter — Meshtastic Network Monitor",
   "main": "main.js",
   "type": "commonjs",

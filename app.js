@@ -7,7 +7,7 @@ const S = {
   filter:'all', startTime:null, selectedNode:null,
   uptimeTimer:null, wsTimer:null,
   // UI shell state
-  page:'messages', peerFilter:'all', everConnected:false, accent:'blue',
+  page:'messages', peerFilter:'all', everConnected:false, accent:'lime',
   // Config page state — one entry per config section (see CFG_SECTIONS)
   configs:{}, configEnums:null, configTab:'device', configModuleTab:'mqtt', configDirty:{},
   logs:[],
@@ -1020,18 +1020,21 @@ function toggleTheme() {
 // ══════════════════════════════════════════════════════════════════
 // SETTINGS — accent colour
 // ══════════════════════════════════════════════════════════════════
+// Aurora accent pairs — each swatch is a {from, to} gradient, matching the
+// lime/teal pairing already used for the default brand gradient.
 const ACCENT_COLORS = [
-  { id:'blue',   name:'Blue',          hex:'#0a84ff' },
-  { id:'purple', name:'Purple',        hex:'#bf5af2' },
-  { id:'pink',   name:'Pink',          hex:'#ff375f' },
-  { id:'orange', name:'Orange',        hex:'#ff9f0a' },
-  { id:'teal',   name:'Teal',         hex:'#20c9b0' },
-  { id:'lime',   name:'Electric lime', hex:'#c6ff2e' },
+  { id:'lime',   name:'Lime',   hex:'#c6ff4a', hex2:'#34e0a1' },
+  { id:'blue',   name:'Blue',   hex:'#4ac8ff', hex2:'#7c5cff' },
+  { id:'violet', name:'Violet', hex:'#9c7cff', hex2:'#ff6bcb' },
+  { id:'coral',  name:'Coral',  hex:'#ff8a5c', hex2:'#ffd166' },
+  { id:'teal',   name:'Teal',   hex:'#34e0a1', hex2:'#4ac8ff' },
+  { id:'pink',   name:'Pink',   hex:'#ff6bcb', hex2:'#ff8a5c' },
 ];
 
 function applyAccent(id) {
   const c = ACCENT_COLORS.find(a => a.id === id) || ACCENT_COLORS[0];
   document.documentElement.style.setProperty('--accent', c.hex);
+  document.documentElement.style.setProperty('--accent-2', c.hex2);
   S.accent = c.id;
   try { localStorage.setItem('mn_accent', c.id); } catch {}
   document.querySelectorAll('.accent-swatch').forEach(el => el.classList.toggle('active', el.dataset.accent === c.id));
@@ -1044,7 +1047,7 @@ function renderSettingsPage() {
   el.innerHTML = ACCENT_COLORS.map(c => `
     <div class="accent-item">
       <button class="accent-swatch${S.accent === c.id ? ' active' : ''}" data-accent="${c.id}"
-        style="background:${c.hex}" title="${esc(c.name)}" onclick="setAccent('${c.id}')">
+        style="background:linear-gradient(135deg,${c.hex},${c.hex2})" title="${esc(c.name)}" onclick="setAccent('${c.id}')">
         <span class="icon filled">check</span>
       </button>
       <span class="accent-name">${esc(c.name)}</span>
@@ -1839,8 +1842,8 @@ function init() {
   applyTheme(theme);
 
   // Accent colour
-  let accent = 'blue';
-  try { accent = localStorage.getItem('mn_accent') || 'blue'; } catch {}
+  let accent = 'lime';
+  try { accent = localStorage.getItem('mn_accent') || 'lime'; } catch {}
   applyAccent(accent);
 
   // Remember the last node IP the user connected to
